@@ -778,3 +778,616 @@ PUT is commonly used to replace/update an existing resource.
 		registerUser(...)
 
 		This is the connection between HTTP and the Spring controller method.
+
+12.In Spring MVC, request parameter annotations are annotations you put on controller method arguments to tell Spring where to get values from the incoming HTTP request.
+	
+	The most important ones are:
+		@PathVariable
+		@RequestParam
+		@RequestBody
+		@RequestHeader
+		@CookieValue
+
+	1. @RequestParam
+
+		Suppose the client sends:
+
+		GET /users?name=john&age=25
+
+		The values:
+
+		name=john
+		age=25
+
+		are query parameters.
+
+		You can access them with @RequestParam:
+
+		@GetMapping("/users")
+		public String getUser(
+		        @RequestParam String name,
+		        @RequestParam int age) {
+
+		    return name + " " + age;
+		}
+
+		Spring sees:
+
+		GET /users?name=john&age=25
+
+		and essentially does:
+
+		name → "john"
+		age  → 25
+
+		Then your method receives:
+
+		getUser("john", 25)
+
+		@RequestParam(
+			defaultValue ="default" // can provide default values;
+			required = false  // a requestparam is required true by default 
+		)
+	2.@PathVariable
+
+		Consider:
+
+			GET /users/25
+
+			Here 25 is part of the URL path.
+
+			You would use:
+
+			@GetMapping("/users/{id}")
+			public User getUser(@PathVariable Long id) {
+			    ...
+			}
+
+			Spring maps:
+
+			/users/{id}
+			       ↓
+			/users/25
+			       ↓
+			id = 25
+
+			So:
+
+			/users/25
+	3.@RequestBody
+
+		Now consider a POST request:
+
+		POST /users
+
+		with JSON:
+
+		{
+		    "name": "John",
+		    "age": 25
+		}
+
+		The data isn't in the URL.
+
+		It's in the HTTP request body.
+
+		So you use:
+
+		@PostMapping("/users")
+		public User createUser(@RequestBody User user) {
+		    ...
+		}
+
+		Spring takes the JSON:
+
+		{
+		    "name": "John",
+		    "age": 25
+		}
+
+		and converts it into:
+
+		User
+
+		Conceptually:
+
+		JSON request body
+		       ↓
+		@RequestBody
+		       ↓
+		Java User object
+
+		This conversion is handled by Spring's HTTP message conversion infrastructure.
+
+	4.@RequestHeader
+
+		HTTP requests also contain headers.
+
+		For example:
+
+		GET /users
+
+		Authorization: Bearer abc123
+		Accept: application/json
+
+		You can access a header using:
+
+		@GetMapping("/users")
+		public String getUsers(
+		        @RequestHeader("Authorization") String authorization) {
+
+		    return authorization;
+		}
+
+		Spring extracts:
+
+		Authorization: Bearer abc123
+
+		and gives your method:
+
+		authorization = "Bearer abc123"
+	5.@CookieValue
+
+	You can also get values from cookies:
+
+		@GetMapping("/profile")
+		public String profile(
+		        @CookieValue("sessionId") String sessionId) {
+
+		    return sessionId;
+		}
+
+		If the browser sends:
+
+		Cookie: sessionId=abc123
+
+		Spring gives you:
+
+		sessionId = "abc123"
+
+13.IoC, Beans, ApplicationContext & Dependency Injection
+	
+	1. What is IoC?
+
+		IoC = Inversion of Control
+
+		The basic idea is:
+
+		Instead of our code creating and managing the objects it needs, Spring does it for us.
+
+		Without Spring, we usually control things ourselves.
+
+		With Spring, Spring takes over that responsibility.
+
+	2. Normal Java — we create the objects ourselves
+
+		For example:
+
+		public class UserService {
+
+		    public void register() {
+		        System.out.println("Registering user");
+		    }
+		}
+
+		And:
+
+		public class UserController {
+
+		    private UserService userService;
+
+		    public UserController() {
+		        this.userService = new UserService();
+		    }
+
+		    public void register() {
+		        userService.register();
+		    }
+		}
+
+		The important line is:
+
+		this.userService = new UserService();
+
+		UserController is creating its own dependency.
+
+		So the relationship is:
+
+		UserController
+		      │
+		      │ creates
+		      ↓
+		UserService
+
+		The controller is in control of creating UserService.
+
+	3. Now Spring takes over
+
+		With Spring, we can write:
+
+		@Service
+		public class UserService {
+
+		    public void register() {
+		        System.out.println("Registering user");
+		    }
+		}
+
+		And:
+
+		@RestController
+		public class UserController {
+
+		    private final UserService userService;
+
+		    public UserController(UserService userService) {
+		        this.userService = userService;
+		    }
+
+		    public void register() {
+		        userService.register();
+		    }
+		}
+
+		Notice there is no:
+
+		new UserService();
+
+		inside UserController.
+
+		So where does the UserService come from?
+
+		Spring creates it and gives it to UserController.
+
+		That's IoC.
+
+	4. What exactly has been "inverted"?
+
+		Before Spring:
+
+		Your code
+		   │
+		   ├── creates UserController
+		   ├── creates UserService
+		   └── connects them
+
+		With Spring:
+
+		Spring
+		   │
+		   ├── creates UserController
+		   ├── creates UserService
+		   └── connects them
+
+		So the control has moved from:
+
+		Your code
+		    ↓
+		Spring
+
+		That's the "inversion" in Inversion of Control.
+
+	5. What is a Bean?
+
+		A bean is basically an object that Spring creates and manages.
+
+		For example:
+
+		@Service
+		public class UserService {
+		}
+
+		Spring sees @Service and thinks roughly:
+
+		"I found this class.
+		I should create an object from it
+		and manage that object."
+
+		Conceptually:
+
+		UserService userService = new UserService();
+
+		Spring then manages that object.
+
+		That object is called a Spring bean.
+
+		So:
+
+		Class
+		 ↓
+		@Service
+		 ↓
+		Spring discovers it
+		 ↓
+		Spring creates an object
+		 ↓
+		That object becomes a Spring bean
+	6. @Controller, @Service, @Repository
+
+		These annotations tell Spring that a class should be discovered and managed as a bean.
+
+		For example:
+
+		@Service
+		public class UserService {
+		}
+		@Repository
+		public class UserRepository {
+		}
+		@Controller
+		public class UserController {
+		}
+
+		And:
+
+		@RestController
+		public class UserController {
+		}
+
+		@RestController is also a Spring-managed component.
+
+		So don't think:
+
+		"@Service magically creates an object."
+
+		A better way to think about it is:
+
+		"@Service makes the class eligible for Spring's component scanning, and Spring can then create and manage an instance of that class as a bean."
+
+	7. What is the ApplicationContext?
+
+		Now we have a problem.
+
+		If Spring is responsible for creating and managing all these objects...
+
+		Where does Spring keep track of them?
+
+		This is where the ApplicationContext comes in.
+
+		The ApplicationContext is basically Spring's container for the application.
+
+		A useful mental model is:
+
+		ApplicationContext
+		       │
+		       ├── UserController
+		       ├── UserService
+		       ├── UserRepository
+		       └── ...
+
+		You can think of it like a big place where Spring keeps track of the beans it manages.
+
+	8. Very simplified ApplicationContext
+
+		Imagine we created our own tiny version of Spring:
+
+		public class MyApplicationContext {
+
+		    private Map<String, Object> beans = new HashMap<>();
+
+		    public void register(String name, Object object) {
+		        beans.put(name, object);
+		    }
+
+		    public Object getBean(String name) {
+		        return beans.get(name);
+		    }
+		}
+
+		Then:
+
+		MyApplicationContext context =
+		        new MyApplicationContext();
+
+		UserService userService =
+		        new UserService();
+
+		context.register("userService", userService);
+
+		Now conceptually:
+
+		ApplicationContext
+		       │
+		       └── "userService"
+		                ↓
+		          UserService object
+
+		Later, you could ask:
+
+		UserService service =
+		    (UserService) context.getBean("userService");
+
+		Basically:
+
+		"Give me the UserService object that you're managing."
+
+		And the context gives it to you.
+
+	9. The real ApplicationContext does much more
+
+		The real ApplicationContext isn't just a simple Map.
+
+		It is responsible for a lot of Spring's infrastructure.
+
+		Some of the important things include:
+
+		ApplicationContext
+		       │
+		       ├── Bean creation
+		       ├── Dependency Injection
+		       ├── Bean lifecycle
+		       ├── Configuration
+		       ├── Component scanning
+		       ├── Events
+		       ├── Application properties
+		       └── other Spring infrastructure
+
+		So a good mental model is:
+
+		                 ApplicationContext
+		                        │
+		          ┌─────────────┼─────────────┐
+		          ↓             ↓             ↓
+		        Beans      Configuration   Infrastructure
+		          │
+		          ├── UserController
+		          ├── UserService
+		          ├── UserRepository
+		          └── ...
+	10. How does Spring find these classes?
+
+		This is where things like:
+
+		@Component
+		@Service
+		@Repository
+		@Controller
+		@RestController
+
+		come into play.
+
+		Suppose we have:
+
+		@Service
+		public class UserService {
+		}
+		@Repository
+		public class UserRepository {
+		}
+		@RestController
+		public class UserController {
+
+		    private final UserService userService;
+
+		    public UserController(UserService userService) {
+		        this.userService = userService;
+		    }
+		}
+
+		When the application starts, roughly speaking:
+
+		Spring Boot starts
+		       ↓
+		ApplicationContext created
+		       ↓
+		Component scanning
+		       ↓
+		Find @Service
+		       ↓
+		Create UserService
+		       ↓
+		Find @Repository
+		       ↓
+		Create UserRepository
+		       ↓
+		Find @RestController
+		       ↓
+		Create UserController
+		       ↓
+		Inject UserService into UserController
+
+		Eventually the context has something like:
+
+		ApplicationContext
+		│
+		├── UserService
+		│
+		├── UserRepository
+		│
+		└── UserController
+		       │
+		       └── UserService
+	11. This is where Dependency Injection comes in
+
+		IoC and DI are closely related.
+
+		Look at:
+
+		public class UserController {
+
+		    private final UserService userService;
+
+		    public UserController(UserService userService) {
+		        this.userService = userService;
+		    }
+		}
+
+		UserController depends on UserService.
+
+		That's why we call UserService a dependency.
+
+		Without Spring, you might do:
+
+		public UserController() {
+		    this.userService = new UserService();
+		}
+
+		The controller creates its own dependency.
+
+		With Spring:
+
+		public UserController(UserService userService) {
+		    this.userService = userService;
+		}
+
+		The controller basically says:
+
+		"I need a UserService."
+
+		Spring says:
+
+		"Okay, here you go."
+
+	12. The Dependency Injection process
+
+		Conceptually:
+
+		Spring creates UserService
+		        ↓
+		Spring creates UserController
+		        ↓
+		Spring sees UserController needs UserService
+		        ↓
+		Spring passes UserService into constructor
+
+		So:
+
+		UserController
+		      │
+		      │ needs
+		      ↓
+		UserService
+
+		And Spring connects them.
+
+		That's Dependency Injection.
+
+	13. IoC vs Dependency Injection
+
+		These are related, but they aren't exactly the same thing.
+
+		IoC
+
+		IoC is the big/general idea:
+
+		The framework takes control of creating and managing objects instead of your application code doing it.
+
+		Dependency Injection
+
+		DI is one way of achieving IoC.
+
+		It means:
+
+		Instead of an object creating its own dependencies, the dependencies are provided to it.
+
+		So you can think of it like:
+
+		IoC
+		 │
+		 └── Dependency Injection
+
+		Or:
+
+		IoC = the overall principle
+
+		DI = one technique Spring uses to implement that principle
