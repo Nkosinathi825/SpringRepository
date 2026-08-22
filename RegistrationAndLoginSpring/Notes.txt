@@ -1,0 +1,780 @@
+Lessons learned while working with spring
+
+1.You should not put a class annotated with @SpringBootApplication in the default package because @SpringBootApplication enables component scanning, and without a named package Spring doesn't have a proper package boundary for that scan.
+
+	The key idea
+		Suppose you have:
+		@SpringBootApplication
+		public class MyApplication {
+		    public static void main(String[] args) {
+		        SpringApplication.run(MyApplication.class, args);
+		    }
+		}
+		and there is no:
+		package com.example.myapp;
+
+		Then MyApplication is in the default package.
+
+		@SpringBootApplication includes @ComponentScan.
+
+		Conceptually:
+
+		@SpringBootApplication
+		        │
+		        ├── @Configuration
+		        ├── @EnableAutoConfiguration
+		        └── @ComponentScan
+		                ↓
+		        Find Spring components
+
+		Normally, Spring uses the package containing your application class as the starting point.
+
+		For example:
+
+		com.mycompany.registration
+		        │
+		        ├── RegistrationApplication
+		        ├── controller
+		        ├── service
+		        └── repository
+
+		Spring can effectively scan:
+
+		com.mycompany.registration
+
+		and its subpackages.
+
+		But with the default package:
+
+		(default package)
+		        │
+		        └── MyApplication
+
+		there is no meaningful package namespace to use as the scan boundary.
+
+		Spring may therefore end up scanning classes across the classpath/JARs, including framework classes and configuration classes that it should not be scanning as your application's components.
+
+		That's why Spring Boot warns:
+
+		Your ApplicationContext is unlikely to start due to a
+		@ComponentScan of the default package.
+
+2.@RestController is a Spring annotation that tells Spring that a class handles HTTP requests and that its methods return data directly as the HTTP response body.@RestController Used primarily for REST APIs.
+	
+	@RestController is essentially a combination of:
+		@Controller
+		@ResponseBody
+
+	@Controller
+
+		Tells Spring:
+
+		"This class is a web controller."
+
+		Spring will detect it during component scanning and create it as a Spring bean.
+
+	@ResponseBody
+
+		Tells Spring:
+
+		"The value returned from this method should be written directly into the HTTP response body."
+
+		That's the important part for REST APIs.
+
+	Why is @ResponseBody important?
+
+		Consider:
+
+		@Controller
+		public class HelloController {
+
+		    @GetMapping("/hello")
+		    public String getHello() {
+		        return "Hello";
+		    }
+		}
+
+		With a regular @Controller, Spring traditionally interprets the returned String as a view name.
+
+		It could think:
+
+		"Hello"
+		  ↓
+		Find a view/template called "Hello"
+
+		But with:
+
+		@RestController
+
+		Spring understands:
+
+		"Hello"
+		  ↓
+		HTTP response body
+
+		So:
+
+		@RestController
+		public class HelloController {
+
+		    @GetMapping("/hello")
+		    public String getHello() {
+		        return "Hello";
+		    }
+		}
+
+		produces:
+
+		HTTP Response
+
+		200 OK
+
+		Hello
+
+
+	@RestController doesnt define an endpoint 
+
+3.@RequestMapping
+
+	@RequestMapping is the general-purpose mapping annotation.
+		For example:
+			@RequestMapping("/users")
+			public class UserController {
+			}
+
+			This tells Spring:
+
+			All mappings inside this controller start with /users.
+
+			You can also use it on a method:
+
+			@RequestMapping("/users")
+			public List<User> getUsers() {
+			    return users;
+			}
+
+			@RequestMapping(
+		    value = "/users",
+		    method = RequestMethod.GET
+			)
+			public List<User> getUsers() {
+			    return users;
+			}
+
+4.@GetMapping means:
+
+	Handle HTTP GET requests.
+
+	Example:
+
+	@GetMapping("/users")
+	public List<User> getUsers() {
+	    return users;
+	}
+
+	This handles:
+
+	GET /users
+
+	GET is normally used to retrieve data.
+5.@PostMapping means:
+	Handle HTTP POST requests.
+	POST is commonly used to create something or submit data.
+	Example:
+	@PostMapping("/users")
+	public User createUser(@RequestBody User user) {
+	    return userService.createUser(user);
+	}
+
+	A client might send:
+
+	POST /users
+
+	with:
+
+	{
+	    "name": "John",
+	    "age": 25
+	}
+6.@PutMapping handles HTTP PUT.
+
+PUT is commonly used to replace/update an existing resource.
+	@PutMapping("/users/{id}")
+	public User updateUser(
+	        @PathVariable Long id,
+	        @RequestBody User user) {
+
+	    return userService.updateUser(id, user);
+	}
+
+	Request:
+
+	PUT /users/10
+
+	Body:
+
+	{
+	    "name": "John",
+	    "age": 30
+	}
+7.@PatchMapping handles HTTP PATCH.
+	PATCH is generally used for a partial update.
+	For example, suppose the user is:
+	{
+	    "name": "John",
+	    "age": 25,
+	    "email": "john@example.com"
+	}
+
+	You might want to change only the email:
+
+	PATCH /users/10
+
+	with:
+
+	{
+	    "email": "newjohn@example.com"
+	}
+
+	Unlike PUT, PATCH generally means:
+
+	"Change these particular fields."
+8.@DeleteMapping handles HTTP DELETE.
+
+	It's normally used to delete a resource.
+
+	@DeleteMapping("/users/{id}")
+	public void deleteUser(@PathVariable Long id) {
+	    userService.deleteUser(id);
+	}
+
+	Request:
+
+	DELETE /users/10
+
+	Spring calls:
+
+	deleteUser(10)
+
+9.What is a DispatcherServlet?
+
+	A DispatcherServlet is a servlet.
+
+	It extends the Servlet API's HttpServlet and acts as a single entry point for Spring MVC HTTP requests.
+
+	Instead of you creating:
+
+	/hello  → HelloServlet
+	/users  → UserServlet
+	/orders → OrderServlet
+
+	Spring typically has:
+
+	/* → DispatcherServlet
+
+	Then DispatcherServlet receives the request and decides which Spring controller method should handle it.
+
+	So its job is basically:
+
+	Receive an HTTP request → find the Spring method mapped to that request → invoke that method → turn the result into an HTTP response.
+
+	1.Basic idea of a DispatcherServlet
+
+		Forget Spring for a moment.
+
+		A servlet can receive an HTTP request and decide what code should run based on:
+
+		URL/path
+		HTTP method (GET, POST, etc.)
+
+		Example:
+
+		HTTP Request
+		     ↓
+		MyDispatcherServlet
+		     ↓
+		Look at URL
+		     ↓
+		Look at HTTP method
+		     ↓
+		Decide what code should run
+
+		For example:
+
+		GET /hello
+
+		The servlet checks:
+
+		if (method.equals("GET") && path.equals("/hello"))
+
+		and then runs the code for /hello.
+
+		So basically, a dispatcher is responsible for figuring out which code should handle a request.
+
+	2. Why not put everything inside the servlet?
+
+		You could do something like:
+
+		if (path.equals("/hello")) {
+		    ...
+		}
+
+		if (path.equals("/users")) {
+		    ...
+		}
+
+		if (path.equals("/orders")) {
+		    ...
+		}
+
+		if (path.equals("/products")) {
+		    ...
+		}
+
+		But obviously this gets messy.
+
+		The servlet would eventually contain a huge amount of application logic.
+
+		Spring doesn't want the DispatcherServlet to contain all of our business/application logic.
+
+		Instead, we put the logic inside controllers.
+
+		Example:
+
+		@RestController
+		public class HelloController {
+
+		    @GetMapping("/hello")
+		    public String hello() {
+		        return "Hello You there";
+		    }
+		}
+
+		Now the question becomes:
+
+		GET /hello
+		    ↓
+		Which controller/method should run?
+
+		That's where Handler Mappings come in.
+
+	3. Handler Mapping
+
+		Spring needs some kind of registry that keeps track of:
+
+		HTTP method + URL
+		        ↓
+		method that should handle it
+
+		Conceptually, imagine:
+
+		Map<RequestMapping, HandlerMethod> mappings;
+
+		Inside this map we could have:
+
+		GET /hello
+		    ↓
+		HelloController.hello()
+
+		GET /users
+		    ↓
+		UserController.getUsers()
+
+		POST /users
+		    ↓
+		UserController.createUser()
+
+		So when we write:
+
+		@GetMapping("/hello")
+		public String hello() {
+		    return "Hello You there";
+		}
+
+		Spring finds this method during application startup and registers something conceptually like:
+
+		mappings.put(
+		    new RequestMapping("GET", "/hello"),
+		    new HandlerMethod(helloController, "hello")
+		);
+
+		The important thing:
+
+		The URL mapping isn't registered directly on the servlet.
+
+		Instead, Spring's MVC infrastructure keeps track of these mappings.
+
+		The DispatcherServlet later asks that infrastructure:
+
+		"I received GET /hello. Who is supposed to handle this?"
+
+	4. Simplified DispatcherServlet
+
+		A very simplified version could look like:
+
+		public class MyDispatcherServlet extends HttpServlet {
+
+		    private Map<RequestMapping, HandlerMethod> mappings;
+
+		    @Override
+		    protected void service(
+		            HttpServletRequest request,
+		            HttpServletResponse response)
+		            throws IOException {
+
+		        String method = request.getMethod();
+		        String path = request.getRequestURI();
+
+		        HandlerMethod handler =
+		            mappings.get(new RequestMapping(method, path));
+
+		        if (handler == null) {
+		            response.setStatus(404);
+		            return;
+		        }
+
+		        Object result = handler.invoke();
+
+		        response.getWriter().write(result.toString());
+		    }
+		}
+
+10.Content-Type tells Spring what format the request body is in, so Spring knows how to turn that body into Java values/objects.
+
+	1. application/json — most common for REST APIs
+		What the request looks like
+		POST /users
+		Content-Type: application/json
+
+		Body:
+
+		{
+		  "name": "John",
+		  "surname": "Smith"
+		}
+		Spring code
+
+		Usually you create a DTO:
+
+		public class UserRequest {
+		    private String name;
+		    private String surname;
+
+		    // getters and setters
+		}
+
+		Then:
+
+		@PostMapping
+		public String registerUser(@RequestBody UserRequest user) {
+		    return "Hello " + user.getName() + " " + user.getSurname();
+		}
+		What Spring does
+
+		Conceptually:
+
+		JSON
+		   ↓
+		Jackson
+		   ↓
+		UserRequest object
+		   ↓
+		registerUser(user)
+
+		@RequestBody is basically telling Spring:
+
+		"Take the request body and convert it into this Java object."
+
+	2. application/x-www-form-urlencoded
+
+		Very common with HTML forms.
+
+		What the request looks like
+		POST /users
+		Content-Type: application/x-www-form-urlencoded
+
+		Body:
+
+		name=John&surname=Smith
+
+		Think of it as:
+
+		key=value&key=value&key=value
+		Spring code
+
+		You can simply do:
+
+		@PostMapping
+		public String registerUser(String name, String surname) {
+		    return "Hello " + name + " " + surname;
+		}
+
+		Or explicitly:
+
+		@PostMapping
+		public String registerUser(
+		        @RequestParam String name,
+		        @RequestParam String surname) {
+
+		    return "Hello " + name + " " + surname;
+		}
+		What Spring does
+		name=John&surname=Smith
+		          ↓
+		Spring extracts parameters
+		          ↓
+		name = "John"
+		surname = "Smith"
+		          ↓
+		registerUser(name, surname)
+
+		Unlike JSON, you don't normally use @RequestBody here.
+
+	3. multipart/form-data
+
+		This is mainly used when you're sending files, often together with other fields.
+
+		For example, uploading a profile picture.
+
+		What it looks like
+
+		It's more complicated internally:
+
+		POST /users
+		Content-Type: multipart/form-data; boundary=----12345
+
+		Body is roughly:
+
+		------12345
+		Content-Disposition: form-data; name="name"
+
+		John
+		------12345
+		Content-Disposition: form-data; name="surname"
+
+		Smith
+		------12345
+		Content-Disposition: form-data; name="profilePicture"; filename="me.jpg"
+		Content-Type: image/jpeg
+
+		[binary image data]
+		------12345--
+
+		You normally don't manually construct this.
+
+		Spring code
+		@PostMapping
+		public String registerUser(
+		        @RequestParam String name,
+		        @RequestParam String surname,
+		        @RequestParam MultipartFile profilePicture) {
+
+		    return "Hello " + name + " " + surname;
+		}
+		What Spring does
+		multipart/form-data
+		        ↓
+		Spring separates the different parts
+		        ↓
+		name → String
+		surname → String
+		profilePicture → MultipartFile
+		        ↓
+		registerUser(...)
+
+		This is the usual choice when uploading files.
+
+	4. text/plain
+
+		The body is simply plain text.
+
+		Request
+		POST /hello
+		Content-Type: text/plain
+
+		Body:
+
+		Hello John
+		Spring code
+		@PostMapping
+		public String hello(@RequestBody String message) {
+		    return "Received: " + message;
+		}
+
+		Spring essentially gives you the body as a String.
+
+		"Hello John"
+		      ↓
+		String
+		      ↓
+		@RequestBody String message
+	5. text/html
+
+		The body contains HTML.
+
+		Request
+		POST /page
+		Content-Type: text/html
+
+		Body:
+
+		<h1>Hello John</h1>
+		<p>Welcome!</p>
+		Spring code
+
+		You can read it as a String:
+
+		@PostMapping
+		public String receiveHtml(@RequestBody String html) {
+		    return "Received HTML";
+		}
+
+		Although in normal Spring MVC applications, HTML is more commonly something Spring returns rather than something your API receives.
+
+		For example:
+
+		@GetMapping("/page")
+		public String page() {
+		    return "index";
+		}
+
+		With a template engine such as Thymeleaf, "index" refers to an HTML template.
+
+	6. application/xml
+
+		XML is another structured data format.
+
+		Request
+		POST /users
+		Content-Type: application/xml
+
+		Body:
+
+		<user>
+		    <name>John</name>
+		    <surname>Smith</surname>
+		</user>
+
+		Spring can convert this into a Java object if the appropriate XML message converter/configuration is available.
+
+		Conceptually:
+
+		@PostMapping
+		public String registerUser(@RequestBody UserRequest user) {
+		    return "Hello " + user.getName();
+		}
+
+		The important part is:
+
+		@RequestBody UserRequest user
+
+		Spring's message conversion infrastructure handles the conversion.
+
+		So:
+
+		XML
+		 ↓
+		XML message converter
+		 ↓
+		UserRequest
+		 ↓
+		controller
+
+		JSON works similarly:
+
+		JSON
+		 ↓
+		Jackson
+		 ↓
+		UserRequest
+		 ↓
+		controller
+	7. application/octet-stream
+
+		This basically means:
+
+		"Here is some arbitrary binary data."
+
+		For example:
+
+		PDF
+		ZIP
+		image
+		binary file
+		etc.
+
+		Request:
+
+		POST /upload
+		Content-Type: application/octet-stream
+
+		Body:
+
+		[binary data]
+		Spring code
+
+		You could receive it as bytes:
+
+		@PostMapping
+		public String upload(@RequestBody byte[] data) {
+		    System.out.println(data.length);
+		    return "Uploaded";
+		}
+11.The conection between Http and Spring 
+	
+	There are three different things you should keep separate in your head:
+
+	1. HTTP method
+		POST
+
+		Answers:
+
+		What are we trying to do with the resource?
+
+	2. URL
+		/users
+
+		Answers:
+
+		Which resource/endpoint are we talking to?
+
+	3. Content-Type
+		Content-Type: application/json
+
+		Answers:
+
+		What format is the request body in?
+
+		So a complete request could be:
+
+		POST /users
+		Content-Type: application/json
+
+		{
+		    "name": "John",
+		    "surname": "Smith"
+		}
+
+		And Spring sees:
+
+		POST
+		 ↓
+		@PostMapping
+
+		/users
+		 ↓
+		@RequestMapping("/users")
+
+		application/json
+		 ↓
+		Jackson / HttpMessageConverter
+
+		JSON
+		 ↓
+		UserRequest
+
+		@RequestBody UserRequest
+		 ↓
+		registerUser(...)
+
+		This is the connection between HTTP and the Spring controller method.
