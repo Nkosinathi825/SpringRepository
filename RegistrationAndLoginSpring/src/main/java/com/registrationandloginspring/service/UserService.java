@@ -1,38 +1,26 @@
 package com.registrationandloginspring.service;
 
+import com.registrationandloginspring.mapper.UserMapper;
 import com.registrationandloginspring.model.User;
+import com.registrationandloginspring.model.dto.RegistrationRequest;
+import com.registrationandloginspring.repository.UserRepository;
 import org.springframework.stereotype.Service;
-
-import java.util.ArrayList;
-import java.util.List;
 
 @Service
 public class UserService {
 
-  public Result<User> save(User user){
-    Result<User> validationResult = validateUser(user);
+  private final UserMapper userMapper;
+  private final UserRepository userRepository;
 
-    if(validationResult.isSuccessful()){
-      user.setId(10L);
-    }
-    return validationResult;
+  public UserService(UserMapper userMapper , UserRepository userRepository) {
+    this.userMapper = userMapper;
+    this.userRepository = userRepository;
   }
 
-  private Result<User> validateUser(User user){
-
-    List<ValidationError> errors = new ArrayList<>();
-
-    if(user.getName().length()<5){
-      errors.add(new ValidationError("name","name must contain at least 5 characters"));
-    }
-    if(user.getSurname().length()<5){
-      errors.add(new ValidationError("name","surname must contain at least 5 characters"));
-    }
-
-    if(!errors.isEmpty()){
-      return Result.failure(errors);
-    }
-
-    return Result.success(user);
+  public User save(RegistrationRequest registrationRequest) {
+    User user = userMapper.toUser(registrationRequest);
+    User savedUser = userRepository.save(user);
+    return user;
   }
+
 }

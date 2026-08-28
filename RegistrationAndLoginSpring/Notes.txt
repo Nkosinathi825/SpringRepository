@@ -1,4 +1,4 @@
-Lessons learned while working with spring
+Lessons learned while working on this spring project 
 
 1.You should not put a class annotated with @SpringBootApplication in the default package because @SpringBootApplication enables component scanning, and without a named package Spring doesn't have a proper package boundary for that scan.
 
@@ -1391,3 +1391,355 @@ PUT is commonly used to replace/update an existing resource.
 		IoC = the overall principle
 
 		DI = one technique Spring uses to implement that principle
+
+14.Validation in Spring MVC
+
+	1. What is Bean Validation?
+
+		Spring MVC has built-in support for Jakarta Bean Validation.
+
+		The basic idea is:
+
+		We put validation rules on our Java object, and Spring checks those rules before the controller method runs.
+
+		For example:
+
+		@NotBlank
+		String username
+
+		means:
+
+		Username cannot be blank.
+
+		Instead of writing lots of if statements ourselves, we declare the rules and let the validation system check them.
+
+	3. Create a request DTO
+
+		It's usually better not to put these validation rules directly on your User entity.
+
+		Instead, create a class specifically for the data the client is allowed to send.
+
+		For example:
+
+		public record RegistrationRequest(
+
+		        @NotBlank(message = "Username is required")
+		        @Size(
+		            min = 5,
+		            max = 20,
+		            message = "Username must be between 5 and 20 characters"
+		        )
+		        String username,
+
+		        @NotBlank(message = "Email is required")
+		        @Email(message = "Email address is invalid")
+		        String email,
+
+		        @NotBlank(message = "Password is required")
+		        @Size(
+		            min = 8,
+		            message = "Password must be at least 8 characters"
+		        )
+		        String password
+
+		) {}
+
+		Now the validation rules live next to the data they're describing.
+
+		For example:
+
+		@Size(min = 8)
+		String password
+
+		basically means:
+
+		Password must be at least 8 characters long.
+
+		So instead of:
+
+		if (password.length() < 8) {
+		    ...
+		}
+
+		we just declare:
+
+		@Size(min = 8)
+
+		and Bean Validation handles the checking.
+
+	4. What do these annotations mean?
+
+		Some common ones:
+
+		@NotBlank
+
+		The value cannot be null, empty, or just whitespace.
+
+		@Size(min = 5, max = 20)
+
+		The value must be between 5 and 20 characters/items, depending on the type.
+
+		@Email
+
+		The value should have a valid email format.
+
+		So our request object is basically saying:
+
+		RegistrationRequest
+		│
+		├── username
+		│     ├── required
+		│     └── 5–20 characters
+		│
+		├── email
+		│     ├── required
+		│     └── valid email format
+		│
+		└── password
+		      ├── required
+		      └── at least 8 characters
+	6. What happens when the data is valid?
+
+		The controller method gets to run normally.
+
+	7. What happens when the data is invalid?
+
+		Now suppose the client sends:
+
+		{
+		    "username": "ab",
+		    "email": "hello",
+		    "password": "123"
+		}
+
+		Spring first creates the object:
+
+		RegistrationRequest
+		│
+		├── username = "ab"
+		├── email = "hello"
+		└── password = "123"
+
+		Then validation runs.
+
+		Username
+		"ab"
+		 ↓
+		@Size(min = 5)
+		 ↓
+		❌ Invalid
+		Email
+		"hello"
+		 ↓
+		@Email
+		 ↓
+		❌ Invalid
+		Password
+		"123"
+		 ↓
+		@Size(min = 8)
+		 ↓
+		❌ Invalid
+
+		Spring finds all these validation failures.
+
+		You don't have to write:
+
+		if (username.length() < 5) {
+		    ...
+		}
+
+		if (!email.contains("@")) {
+		    ...
+		}
+
+		if (password.length() < 8) {
+		    ...
+		}
+
+		That's the whole point of Bean Validation.
+
+	8. What happens to the controller?
+
+		This is important.
+
+		If validation fails, the controller method doesn't continue normally.
+
+		Instead:
+
+		HTTP request
+		     ↓
+		@RequestBody
+		     ↓
+		RegistrationRequest
+		     ↓
+		@Valid
+		     ↓
+		❌ Validation fails
+		     ↓
+		Controller method doesn't continue
+
+		For @Valid on an @RequestBody, Spring MVC uses:
+
+		MethodArgumentNotValidException
+
+		to represent the validation failure.
+
+	9. Handling the validation errors
+
+		Instead of letting Spring return whatever default error response it has, we can create our own handler.
+
+		Use:
+
+		@RestControllerAdvice
+		public class ValidationExceptionHandler {
+
+		    @ExceptionHandler(MethodArgumentNotValidException.class)
+		    public ResponseEntity<?> handleValidationErrors(
+		            MethodArgumentNotValidException exception) {
+
+		        var errors = exception.getBindingResult()
+		                .getFieldErrors();
+
+		        // ...
+		    }
+		}
+
+		The important idea is:
+
+		@RestControllerAdvice
+
+		basically says:
+
+		"This class can handle exceptions coming from my controllers."
+
+		And:
+
+		@ExceptionHandler(MethodArgumentNotValidException.class)
+
+		says:
+
+		"If this particular validation exception happens, use this method."
+
+	10. Get all the validation errors
+
+		We can get the individual field errors:
+
+		exception.getBindingResult()
+		         .getFieldErrors()
+
+		Then turn them into our own response format:
+
+		@RestControllerAdvice
+		public class ValidationExceptionHandler {
+
+		    @ExceptionHandler(MethodArgumentNotValidException.class)
+		    public ResponseEntity<?> handleValidationErrors(
+		            MethodArgumentNotValidException exception) {
+
+		        List<ValidationError> errors =
+		                exception.getBindingResult()
+		                        .getFieldErrors()
+		                        .stream()
+		                        .map(error -> new ValidationError(
+		                                error.getField(),
+		                                error.getDefaultMessage()
+		                        ))
+		                        .toList();
+
+		        return ResponseEntity
+		                .badRequest()
+		                .body(errors);
+		    }
+		}
+
+		And our response object:
+
+		public record ValidationError(
+		        String field,
+		        String message
+		) {}
+	11. What does the client receive?
+
+		If the client sends:
+
+		{
+		    "username": "ab",
+		    "email": "hello",
+		    "password": "123"
+		}
+
+		Spring finds:
+
+		username → invalid
+		email    → invalid
+		password → invalid
+
+		Our exception handler collects them.
+
+		The API can then return something like:
+
+		[
+		    {
+		        "field": "username",
+		        "message": "Username must be between 5 and 20 characters"
+		    },
+		    {
+		        "field": "email",
+		        "message": "Email address is invalid"
+		    },
+		    {
+		        "field": "password",
+		        "message": "Password must be at least 8 characters"
+		    }
+		]
+
+		with a:
+
+		400 Bad Request
+
+		This is useful because the client gets all the validation problems at once, instead of fixing one error, sending the request again, finding another error, and repeating the process.
+
+	12. The exception doesn't mean something catastrophic happened
+
+		This is worth understanding.
+
+		You might think:
+
+		"The user entered an invalid password. Why are we throwing an exception?"
+
+		From a business perspective, invalid input isn't necessarily some catastrophic event.
+
+		But Spring MVC needs a way to say:
+
+		"This request failed validation, so stop the normal controller flow and deal with the validation errors."
+
+		MethodArgumentNotValidException is the mechanism Spring MVC uses for that.
+
+		So don't think of it as:
+
+		Bad password
+		    ↓
+		Something terrible happened
+		    ↓
+		EXCEPTION!!!
+
+		Think of it more like:
+
+		HTTP request
+		     ↓
+		Create RegistrationRequest
+		     ↓
+		Run validation
+		     ↓
+		❌ Validation failed
+		     ↓
+		Stop controller execution
+		     ↓
+		MethodArgumentNotValidException
+		     ↓
+		@RestControllerAdvice
+		     ↓
+		Build error response
+		     ↓
+		400 Bad Request

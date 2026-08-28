@@ -1,9 +1,9 @@
 package com.registrationandloginspring.controller;
 
 import com.registrationandloginspring.model.User;
-import com.registrationandloginspring.service.Result;
+import com.registrationandloginspring.model.dto.RegistrationRequest;
 import com.registrationandloginspring.service.UserService;
-import org.springframework.http.ResponseEntity;
+import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -20,12 +20,7 @@ public class UserController {
   }
 
   @PostMapping
-  public ResponseEntity<Result<User>> registerUser(@RequestBody User user){
-    Result<User> userResult = userService.save(user);
-    if(userResult.isSuccessful()){
-      return  ResponseEntity.ok(userResult);
-    }
-
-    return ResponseEntity.badRequest().body(userResult);
+  public User registerUser(@Valid @RequestBody RegistrationRequest registrationRequest) {
+    return userService.save(registrationRequest);
   }
 }
