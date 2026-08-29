@@ -1,6 +1,7 @@
 package com.registrationandloginspring.exception;
 
-import com.registrationandloginspring.service.ValidationError;
+import com.registrationandloginspring.model.dto.ValidationError;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -23,6 +24,11 @@ public class ValidationExceptionHandler {
             )).toList();
 
     return ResponseEntity.badRequest().body(errors);
+  }
+
+  @ExceptionHandler(InvalidCredentialsException.class)
+  public ResponseEntity<String> handleInvalidCredentials(InvalidCredentialsException exception) {
+    return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(exception.getMessage());
   }
 
 }

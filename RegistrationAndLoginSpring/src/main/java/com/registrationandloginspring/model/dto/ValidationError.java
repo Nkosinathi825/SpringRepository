@@ -1,4 +1,4 @@
-package com.registrationandloginspring.service;
+package com.registrationandloginspring.model.dto;
 
 import java.util.Objects;
 

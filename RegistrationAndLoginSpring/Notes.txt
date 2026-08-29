@@ -1743,3 +1743,282 @@ PUT is commonly used to replace/update an existing resource.
 		Build error response
 		     ↓
 		400 Bad Request
+
+		Entity mapping — the basics
+
+@Entity goes on the class. It tells JPA "this Java class maps to a database table." Without it, JPA ignores the class entirely. By default the table name matches the class name.
+
+@Table(name = "users") overrides the table name. Use it when your class name and table name differ, which they usually do (class User, table users; class OrderItem, table order_items). You can also specify schema, unique constraints, and indexes here.
+
+@Id marks the primary key field. Every entity needs exactly one (or a composite key, which is rarer).
+
+@GeneratedValue(strategy = GenerationType.IDENTITY) tells JPA the database generates the ID. Four strategies exist:
+
+IDENTITY — uses an auto-increment column. Simple, works with MySQL/Postgres. The catch: JPA can't batch inserts because it needs the ID back immediately.
+SEQUENCE — uses a database sequence. Preferred with Postgres/Oracle. Allows batching.
+AUTO — let the provider decide. Usually fine, but you lose control.
+TABLE — a separate table tracks IDs. Portable but slow. Avoid unless you have a reason.
+
+For most projects starting out, IDENTITY is fine. Switch to SEQUENCE when you care about bulk insert performance.
+
+@Column customizes the column mapping. You'll use it for:
+
+name = "email_address" when the field name and column name differ
+nullable = false for NOT NULL
+unique = true for a unique constraint
+length = 500 for varchar length (default is 255)
+columnDefinition = "TEXT" when you need a specific SQL type
+
+If you don't need any of that, skip @Column entirely — JPA maps the field by its name.
+
+Relationships
+
+This is where JPA earns its keep and also where people get burned.
+
+@ManyToOne — many of this entity belong to one of that. This is the "child" side of a parent-child relationship. Example: many Order entities belong to one User. On Order you'd write:
+
+java
+@ManyToOne(fetch = FetchType.LAZY)
+@JoinColumn(name = "user_id")
+private User user;
+
+The @JoinColumn names the foreign key column in the orders table. Always set fetch = FetchType.LAZY here — the default is EAGER, which fetches the User every time you load an Order, whether you asked for it or not. This is the single biggest performance mistake with JPA. Just make it a habit to write LAZY every time.
+
+@OneToMany — the other side. On User:
+
+java
+@OneToMany(mappedBy = "user")
+private List<Order> orders;
+
+mappedBy says "the Order entity owns this relationship via its user field." This is critical: without mappedBy, JPA thinks it's a separate relationship and creates a join table. mappedBy tells it "no, look at the other side, the foreign key already lives there."
+
+Default fetch for @OneToMany is LAZY, which is correct. Don't change it.
+
+@OneToOne — one to one. Same pattern: one side owns it (has @JoinColumn), the other side has mappedBy. Default fetch is EAGER; change it to LAZY.
+
+@ManyToMany — creates a join table. On one side:
+
+java
+@ManyToMany
+@JoinTable(
+    name = "user_roles",
+    joinColumns = @JoinColumn(name = "user_id"),
+    inverseJoinColumns = @JoinColumn(name = "role_id")
+)
+private Set<Role> roles;
+
+Honest advice: most @ManyToMany relationships eventually need extra columns on the join table (created date, granted-by-whom, etc.). When that happens, you have to break it into two @OneToManys with an explicit join entity anyway. A lot of experienced engineers just start there and skip @ManyToMany.
+
+cascade on any relationship controls what happens to related entities when you save/delete the parent. Common ones:
+
+CascadeType.PERSIST — save the parent, save the children too
+CascadeType.ALL — includes remove, which is dangerous; deleting the parent deletes all children
+orphanRemoval = true — remove a child from the parent's collection and it gets deleted from the database
+
+Use CascadeType.ALL only when the child cannot exist without the parent (an OrderItem doesn't exist without its Order). Never on @ManyToOne — you'll delete the parent when you delete one child.
+
+Repository layer
+
+@Repository — you don't need this on interfaces that extend JpaRepository. Spring picks them up regardless. It's only useful on classes where you're implementing a repository yourself, and even then it mostly just translates persistence exceptions.
+
+@Query — write JPQL when method names get ugly:
+
+java
+@Query("select u from User u where u.email = :email and u.active = true")
+Optional<User> findActiveByEmail(@Param("email") String email);
+
+@Param binds the method parameter to the :email placeholder. Use nativeQuery = true when you need raw SQL.
+
+@Modifying — required on any @Query that isn't a SELECT (UPDATE, DELETE). Without it, Spring tries to execute the query as a SELECT and fails. Also requires a transaction, so pair with @Transactional.
+
+@Transactional — mark service methods that hit the database. Reads can be @Transactional(readOnly = true) — Hibernate skips dirty checking, which is a real speedup for large result sets. Writes get plain @Transactional. Put this on your service methods, not repositories.
+
+The often-forgotten but important ones
+
+@Enumerated(EnumType.STRING) — when a field is an enum. Always use STRING, never ORDINAL (the default). ORDINAL stores the enum's position (0, 1, 2), which silently breaks the moment someone reorders the enum values. STRING stores the name. It's slightly bigger and vastly safer.
+
+@Transient — this field is not persisted. Use it for computed values, caches, anything that lives only in memory.
+
+@Embeddable and @Embedded — when a group of fields belongs together but isn't a separate entity. Example: Address (street, city, postal code) embedded inside User. The fields live in the same table as the parent. Good for keeping value objects grouped without over-normalizing.
+
+@Version — optimistic locking. Add a Long version field with @Version and JPA increments it on every update. If two transactions try to update the same row with the same version, one wins and the other gets an exception. Extremely useful in concurrent systems; effectively free to add.
+
+@Lob — for large objects (long text, byte arrays). Maps to CLOB/BLOB in the database.
+
+@CreatedDate, @LastModifiedDate, @CreatedBy, @LastModifiedBy — auditing. Add @EntityListeners(AuditingEntityListener.class) to the entity, @EnableJpaAuditing on a config class, and these fields get populated automatically. Every entity in a real system needs createdAt and updatedAt, so learn this early.
+
+A realistic entity, end to end
+java
+@Entity
+@Table(name = "orders")
+@EntityListeners(AuditingEntityListener.class)
+public class Order {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false, unique = true)
+    private String orderNumber;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private OrderStatus status;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id", nullable = false)
+    private User user;
+
+    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<OrderItem> items = new ArrayList<>();
+
+    @CreatedDate
+    private Instant createdAt;
+
+    @LastModifiedDate
+    private Instant updatedAt;
+
+    @Version
+    private Long version;
+
+    // constructors, getters, setters
+}
+
+Every choice in there has a reason: LAZY on the @ManyToOne to avoid unwanted joins, mappedBy on the @OneToMany so there's no accidental join table, orphanRemoval because an item can't exist without its order, EnumType.STRING for safe enum storage, @Version for concurrent safety, auditing fields because every real entity needs them.
+
+Want me to go deeper on relationships (they're the part that trips everyone up), or on the auditing/transactional setup?
+
+
+
+50. UserDetails interface  is the Spring Securit dedicated interface for the security 
+	notion of "who someone is "
+
+	A security system needs to represent an actor. In the general case that actor could be a person, another service, a script — anything making a request. What it needs to hold is at least three pieces of information:
+
+	An identifier — something that names this actor uniquely. A username, an email, an account number.
+	A credential — something only this actor should know or possess, used to prove they are who they claim. A password, a private key, a token.
+	Their permissions — what this actor is entitled to do. Sometimes called roles, sometimes authorities, sometimes scopes.
+
+		UserDetails
+	├── getUsername()       → the identifier
+	├── getPassword()       → the credential (hashed)
+	├── getAuthorities()    → the permissions
+	├── isEnabled()         → account switched on?
+	├── isAccountNonLocked()      → account locked out?
+	├── isAccountNonExpired()     → account expired?
+	└── isCredentialsNonExpired() → password expired?
+
+	The first three methods are the identifier / credential / permissions trio. The last four are lifecycle flags — ways to disable an account without deleting it. Spring Security checks all four during login and rejects the login if any is false.
+
+	UserDetails is an interface. Spring Security ships a default implementation called User (in the package org.springframework.security.core.userdetails
+
+	The workflow
+
+		At login, something produces a UserDetails from your data source (this is the UserDetailsService's job — we'll cover it under Authentication).
+
+		After login, that UserDetails gets wrapped inside an Authentication object (also under Authentication).
+
+		On every subsequent request, that Authentication is loaded from wherever it was stored (session, token) and made available to your code as the current identity.
+		Inside your controllers, you can access the current UserDetails by injecting @AuthenticationPrincipal UserDetails user as a method parameter, or by calling SecurityContextHolder.getContext().getAuthentication().getPrincipal().
+
+		The principal is always a UserDetails (or the string "anonymousUser" if no one's logged in). That word "principal" is worth internalizing — in security jargon, the principal is the actor an action is being performed on behalf of. Spring Security uses it everywhere.
+
+	UserDetails is Spring Security's word for "an identity." It has an identifier, a credential, and permissions. It is not your entity, and your entity is not it. They're two different things that happen to describe overlapping data.
+
+51.Authentication - Authentication answers one question: can you prove you are who 
+   you claim to be?
+
+   That's the whole idea. Someone shows up claiming to be korah@example.com. Authentication is the process of checking that claim against evidence. If the evidence holds up, they're authenticated. If it doesn't, they're not. There's no gray area — it's a binary outcome.
+
+	The evidence takes different forms depending on the scheme:
+
+	Password — you claim to be Korah, you present the password Korah set. System hashes what you presented and compares to the stored hash.
+	Token — you present a token that a trusted authority previously issued. System verifies the token's signature and trusts what it says about you.
+	Certificate — you present a client certificate signed by a CA the system trusts.
+	Biometric — you present a fingerprint that matches a template on file.
+
+	Different schemes, same shape: claim + evidence → yes or no.
+
+	Phase 1: unauthenticated. You've presented a claim ("I'm Korah") and evidence ("here's my password"), but nothing has been verified yet. It's just a request for authentication.
+
+	Phase 2: authenticated. The evidence checked out. Now the same identity carries proof that it was verified — it's been "authenticated." This is what gets stored and passed around after login.
+
+	Authentication
+
+	This is the interface representing "an authentication request or an authenticated identity" (both phases). Its shape:
+
+	Authentication
+	├── getPrincipal()      → who (usually a UserDetails)
+	├── getCredentials()    → the evidence (usually the password, cleared after auth)
+	├── getAuthorities()    → what they're allowed to do
+	├── isAuthenticated()   → phase 1 (false) or phase 2 (true)
+	└── getName()           → convenience: the username
+
+	The important mental shift: UserDetails is what your data source returns. Authentication is what the security system passes around. UserDetails is data; Authentication is data plus a verification status.
+
+	Concrete implementation: UsernamePasswordAuthenticationToken. This is the class you'll actually see and use. It has two constructors, and this is the design that carries the two-phase idea:
+
+			// Constructor 1: unauthenticated (phase 1)
+		new UsernamePasswordAuthenticationToken(username, password)
+		// → isAuthenticated() returns false
+
+		// Constructor 2: authenticated (phase 2)
+		new UsernamePasswordAuthenticationToken(principal, credentials, authorities)
+		// → isAuthenticated() returns true
+
+		The class enforces this — the phase-1 constructor sets the authenticated flag to false and there is no setter to change it to true. The only way to get an authenticated version is to go through the phase-2 constructor with the authorities argument. This means you can't accidentally create a "trust me, I'm authenticated" object without actually having authorities to hand over. Small detail, meaningful safety property.
+
+	AuthenticationProvider
+
+	If Authentication is the noun, AuthenticationProvider is the verb. It's the interface for "something that can turn an unauthenticated Authentication into an authenticated one." Its shape:
+
+		AuthenticationProvider
+	├── authenticate(Authentication) → Authentication (throws if invalid)
+	└── supports(Class<?>) → boolean (do I handle this type of auth?)
+
+	The authenticate method takes a phase-1 Authentication and returns a phase-2 one, or throws AuthenticationException if the evidence doesn't hold up.
+
+	Why is this an interface with an implementation, rather than just a method? Because there are many ways to authenticate. Username/password against a database is one way. Verifying a JWT is another. Checking an LDAP directory is another. Each way is a different AuthenticationProvider. The supports() method lets the system pick the right provider for a given Authentication type.
+
+	The one you'll actually use is DaoAuthenticationProvider. "DAO" here means data access object — this provider authenticates against a data source. It handles UsernamePasswordAuthenticationToken and does exactly two things when its authenticate() is called:
+
+	Loads the user from a data source (via UserDetailsService — coming next)
+	Compares the presented password against the stored hash (via PasswordEncoder)
+
+	If both work, it builds a phase-2 UsernamePasswordAuthenticationToken with the user's UserDetails as the principal and the authorities from that UserDetails. If either fails, it throws.
+
+	AuthenticationManager
+
+	If there can be many providers, something needs to coordinate them. That's AuthenticationManager. Interface:
+
+	AuthenticationManager
+	└── authenticate(Authentication) → Authentication (throws if invalid)
+
+	Same method signature as AuthenticationProvider — deliberately. The AuthenticationManager is the facade over one or more providers. You hand it a phase-1 Authentication, it figures out which provider(s) can handle that type, delegates to them, and returns the result.
+
+	The standard implementation is ProviderManager. It holds a List<AuthenticationProvider> and iterates through them, asking each supports(authType) until one says yes, then delegates to that one's authenticate(). If no provider supports the type, or the supporting provider throws, the manager throws.
+
+	Why this indirection? Because most apps only have one provider, but the abstraction is future-proofing. If you later add "also allow login via API tokens," you write a second provider and register it — the rest of the app that calls authenticationManager.authenticate(...) doesn't change.
+
+	UserDetailsService
+
+	The last piece. When DaoAuthenticationProvider needs to load a user, it doesn't reach into your database itself — it delegates to a UserDetailsService. That interface has one method:
+
+	UserDetailsService
+	└── loadUserByUsername(String username) → UserDetails
+
+	That's the entire contract. The provider says "give me the user with this username." Your implementation says how. Query a database, read a file, call a REST API — the provider doesn't care. It just needs a UserDetails back, or a UsernameNotFoundException if there isn't one.
+
+	This is where your code plugs into the framework. Everything else — the Authentication, the provider, the manager — is Spring Security's. UserDetailsService is the seam. It's the class you have to write.
+
+	SecurityContext is a wrapper around a single Authentication. It exists as a container so the framework has one place to look for "the current identity" without needing to pass an Authentication reference through every method. That's it — it's basically a holder object.
+
+	SecurityContextHolder is a thread-local storage for the current request's SecurityContext. When any code, anywhere in your app, calls SecurityContextHolder.getContext().getAuthentication(), it's reading from this thread-local. This is how your controllers can find out who's logged in without you passing the Authentication down through your service layers — it's ambient, keyed to the current thread.
+
+	But there's a problem: thread-locals die when the request ends. The current thread returns to the pool, its thread-local gets cleared, and the next request comes in on a fresh thread with an empty SecurityContextHolder. If we stopped after the first three lines, the login would authenticate the user for the current request only — the very next request they made would see them as anonymous again.
+
+	SecurityContextRepository solves this. It's the abstraction for "store the security context somewhere it can survive between requests." The implementation you want — HttpSessionSecurityContextRepository — stores it in the HTTP session. That's the fourth line: take the context, save it to the session so that when the next request arrives, a filter earlier in the chain (SecurityContextHolderFilter) can pull it back out and load it into the thread-local for that new thread.
+
+	The request and response parameters on saveContext() are there because the repository needs to know which session to write to (from the request) and, depending on the implementation, might need to set a cookie header (on the response) — for example a repository that also writes a Set-Cookie for SameSite handling. Just pass them through.
+
+	Returning something useful. The authenticated.getPrincipal() object is a framework UserDetails, not your entity — it has the username, encoded password, and authorities, but not your id or name. If your frontend wants those to render a profile chip, you have to load the entity.
