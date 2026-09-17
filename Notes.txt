@@ -1,0 +1,239 @@
+"Spring" by itself is not a product. It's an umbrella — a family of open-source Java projects maintained by VMware/Broadcom (originally created by Rod Johnson in 2003, formalized in his book Expert One-on-One J2EE Design and Development).
+
+Spring is an ecosystem of open-source Java projects centered around the Spring Framework. It started as a lightweight alternative to J2EE/EJBs in 2003 and now includes projects like Spring Boot, Spring Data, and Spring Security. When people say 'Spring,' they mean some combination of these
+-------------------------------------------------------------------------------------------------
+Spring Framework is the foundational project that everything else builds on. It's a collection of modules published as separate JARs:
+
+spring-core — utilities, resource abstraction
+spring-beans — bean definitions, factory, wiring
+spring-context — the ApplicationContext (IoC container)
+spring-aop — aspect-oriented programming, proxies
+spring-tx — transaction abstraction
+spring-jdbc, spring-orm — data access
+spring-web, spring-webmvc — web layer
+spring-test — test support
+
+The two things Spring Framework is famous for:
+
+The IoC container — an object that creates your objects and wires their dependencies together.
+AOP — the ability to weave in cross-cutting behavior (transactions, security, logging) without you writing it into every method.
+
+-------------------------------------------------------------------------------------------------
+What Spring Boot is
+
+Spring Boot is an opinionated framework built on top of Spring Framework. It doesn't replace Spring Framework — it uses it and adds a layer that removes almost all the setup boilerplate.
+
+The four big things Spring Boot gives you:
+
+	Auto-configuration — it looks at what's on your classpath and configures beans automatically.
+
+	Starters — curated dependency bundles so you don't have to hand-pick versions.
+
+	Embedded servers — the servlet container (Tomcat by default) is packaged inside your JAR.
+
+	Production features — Actuator, sensible logging, externalized config conventions.
+
+Other things Spring Boot gives 
+
+	SpringApplication	The entry point that bootstraps the ApplicationContext
+
+	@SpringBootApplication	Meta-annotation combining @Configuration, @EnableAutoConfiguration, @ComponentScan
+
+	Externalized configuration	application.properties/.yml, profiles, @ConfigurationProperties
+
+	Sensible defaults	Logging via Logback, Jackson for JSON, HikariCP for connection pooling
+
+
+Boot was released in 2014. Before it, wiring up a Spring MVC app meant writing 200+ lines of XML plus a web.xml, packaging as a WAR, and deploying to an external Tomcat.
+
+“Opinionated” means Spring Boot makes sensible choices for you instead of making you configure everything yourself.
+
+"Spring Boot is an opinionated layer on top of Spring Framework that eliminates configuration boilerplate. It gives you auto-configuration, starter dependencies, embedded servers, and production-ready features like Actuator. It doesn't replace Spring Framework — it makes it usable without hours of setup."
+
+-------------------------------------------------------------------------------------------------
+
+A starter is a Maven/Gradle artifact whose only purpose is to pull in a curated set of transitive dependencies at compatible versions. Starter POMs contain almost no code themselves.
+
+For example, spring-boot-starter-web transitively brings in:
+
+spring-boot-starter (core Boot infrastructure + logging)
+spring-boot-starter-json (Jackson)
+spring-boot-starter-tomcat (embedded Tomcat)
+spring-web, spring-webmvc (the actual Spring MVC framework)
+
+You add one line to pom.xml and get ~20 JARs wired at versions that are known to work together. The version harmony comes from the Spring Boot BOM (Bill of Materials) — inherited via spring-boot-starter-parent or imported as a dependencyManagement entry.
+
+Starters do not contain business logic. They're a packaging convenience.
+
+"A starter is a dependency artifact that transitively pulls in a curated set of libraries at compatible versions. spring-boot-starter-web, for example, brings in Spring MVC, Jackson, and embedded Tomcat. Version compatibility comes from the Spring Boot BOM."
+
+-------------------------------------------------------------------------------------------------
+
+Auto-configuration is a mechanism where Spring Boot registers @Configuration classes conditionally based on what's on the classpath and what beans already exist.
+
+How it actually works:
+
+@SpringBootApplication includes @EnableAutoConfiguration.
+That triggers a DeferredImportSelector that reads a file at META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports (in Boot 3+; it was spring.factories in Boot 2).
+That file lists dozens of auto-configuration classes: DataSourceAutoConfiguration, WebMvcAutoConfiguration, HibernateJpaAutoConfiguration, etc.
+Each is a normal @Configuration class annotated with @Conditional* annotations that decide whether it applies.
+
+The important conditional annotations:
+
+@ConditionalOnClass(X.class) — apply only if class X is on the classpath
+@ConditionalOnMissingBean(X.class) — apply only if no user-defined bean of type X exists
+@ConditionalOnProperty(...) — apply only if a property is set
+@ConditionalOnWebApplication — apply only in web apps
+
+So DataSourceAutoConfiguration roughly says: "If HikariCP (or another DataSource impl) is on the classpath AND the user hasn't defined their own DataSource bean AND spring.datasource.url is set, then create a DataSource bean."
+
+This is why:
+
+Adding spring-boot-starter-data-jpa mysteriously "just works" — it puts Hibernate on the classpath and auto-config kicks in.
+Defining your own DataSource bean overrides the auto-configured one — because of @ConditionalOnMissingBean.
+
+"Auto-configuration is Boot's mechanism for registering beans conditionally based on classpath contents. @EnableAutoConfiguration loads a list of @Configuration classes from META-INF, each guarded by @ConditionalOnClass, @ConditionalOnMissingBean, and similar annotations. That's why adding a starter automatically configures the associated beans, and why user-defined beans win over auto-configured ones."
+
+-------------------------------------------------------------------------------------------------
+
+
+The ApplicationContext is the IoC container. Concretely, it's a Java object that:
+
+	Reads bean definitions (from @Component scan, @Bean methods, XML, etc.)
+
+	Instantiates beans in the correct order (resolving dependencies first)
+
+	Injects dependencies into each bean
+
+	Manages the bean lifecycle (init callbacks, destroy callbacks)
+
+	Provides ancillary services: event publishing, resource loading, internationalization, environment/property resolution
+
+ApplicationContext extends the older BeanFactory interface — BeanFactory is the bare minimum (a bean lookup map), and ApplicationContext adds all the enterprise features.
+
+In a Boot web app, the actual concrete class is usually AnnotationConfigServletWebServerApplicationContext. You rarely reference it directly; you interact with it through injected beans.
+
+Conceptually: the ApplicationContext is the runtime home of every bean in your app.
+
+The ApplicationContext is Spring's IoC container. It reads bean definitions, instantiates beans in dependency order, injects their dependencies, and manages their lifecycle. It extends BeanFactory and adds enterprise features like event publishing and environment access. In a Boot app, SpringApplication.run() creates it at startup.
+
+-------------------------------------------------------------------------------------------------
+
+A bean is any object that is instantiated, assembled, and managed by the Spring IoC container.
+
+Two things to be crisp about:
+
+A bean is not a special kind of Java object — it's a regular class. What makes it a bean is that its bean definition is registered with the container.
+A bean definition is metadata: the class name, scope, constructor arguments, dependencies, init/destroy methods, lazy vs eager, etc. The container uses this metadata to create the instance.
+
+You register a bean in three main ways:
+
+Stereotype annotations on a class: @Component, @Service, @Repository, @Controller (all discovered by component scanning)
+@Bean-annotated methods inside a @Configuration class (for third-party classes you can't annotate)
+XML <bean> elements (legacy)
+
+By default, beans are singleton-scoped — one instance per container, shared across all injection points.
+
+-------------------------------------------------------------------------------------------------
+
+A Spring bean is any object whose lifecycle is managed by the Spring container. You register beans by annotating classes with @Component or its stereotypes, or by declaring @Bean methods in a @Configuration class. By default they're singletons — one instance per ApplicationContext.
+
+
+Dependency Injection (DI) is a design pattern where an object receives its dependencies from an external source rather than constructing them itself.
+
+Three flavors:
+
+java
+// 1. Constructor injection — preferred
+public class UserService {
+    private final UserRepository repository;
+    public UserService(UserRepository repository) {
+        this.repository = repository;
+    }
+}
+
+// 2. Setter injection
+public class UserService {
+    private UserRepository repository;
+    @Autowired
+    public void setRepository(UserRepository repository) {
+        this.repository = repository;
+    }
+}
+
+// 3. Field injection — discouraged
+public class UserService {
+    @Autowired
+    private UserRepository repository;
+}
+
+Why constructor injection wins:
+
+Dependencies can be final → immutability
+The class is impossible to instantiate without its dependencies → no NPEs from forgotten wiring
+Trivially testable without Spring (just new UserService(mockRepo))
+Circular dependencies fail loudly at startup instead of hiding
+
+Without Spring, DI is just:
+
+java
+UserRepository repo = new JdbcUserRepository(dataSource);
+UserService service = new UserService(repo);
+UserController controller = new UserController(service);
+
+Spring automates the wiring, but the pattern is not Spring-specific.
+
+Interview-ready answer: "Dependency injection is a pattern where an object receives its collaborators instead of creating them. Spring supports constructor, setter, and field injection. Constructor injection is preferred because dependencies can be final, the object is always fully initialized, and it's testable without Spring."
+
+-------------------------------------------------------------------------------------------------
+
+IoC is the broader design principle; DI is one way to implement it.
+
+In a traditional program you control the flow: your code creates objects, calls methods, decides what happens when. In an IoC design, control is inverted — a framework or container drives the flow and calls into your code at the right moments.
+
+Examples of IoC beyond DI:
+
+A servlet container calling your doGet() method when a request arrives
+A test framework calling your @Test methods
+Spring MVC calling your @GetMapping handler
+
+The oft-quoted phrase: "Don't call us, we'll call you" (the Hollywood Principle).
+
+For our purposes: Spring's IoC container inverts control of object creation and wiring. You describe what you need (via annotations); the container decides when and how to create and connect the objects.
+
+Inversion of Control is a design principle where control over program flow is handed to a framework instead of being driven by your code. Dependency injection is one form of IoC — specifically, inversion of control over object construction and wiring. Spring's container is an IoC container.
+
+-------------------------------------------------------------------------------------------------
+
+Historically, a Java web app was packaged as a WAR (Web Application Archive) and deployed into a standalone servlet container like Tomcat that ran as a separate process. You'd manage the container's lifecycle independently from the app.
+
+An embedded server flips this: the servlet container is a library your app depends on, and your app starts the server programmatically inside its own process. You package everything into an executable JAR (the "fat JAR" or "über JAR") and run:
+
+bash
+java -jar myapp.jar
+
+Boot's default embedded server is Tomcat. You can swap it for Jetty or Undertow by excluding spring-boot-starter-tomcat and including the alternative starter. For reactive apps (WebFlux), the default is Netty.
+
+Why this matters:
+
+Deployment is simpler — one artifact, one process
+Fits containerized (Docker/Kubernetes) deployment naturally
+Every app can have its own server version
+Local development just means java -jar (or running main)
+
+An embedded server means the servlet container is packaged inside the application JAR and started programmatically, so you run the app with java -jar rather than deploying a WAR to an external server. Spring Boot embeds Tomcat by default; Jetty, Undertow, and Netty are alternatives.
+
+-------------------------------------------------------------------------------------------------
+
+Maven is a build tool. Two responsibilities matter most:
+
+Dependency management. You declare dependencies in pom.xml by coordinates (groupId:artifactId:version); Maven downloads them and their transitive dependencies from remote repositories (Maven Central by default) into your local repo (~/.m2/repository).
+Build lifecycle. Maven defines phases (validate, compile, test, package, install, deploy) and plugins that bind to them. mvn package compiles your code, runs tests, and produces a JAR.
+
+Maven also standardizes project layout (src/main/java, src/main/resources, src/test/java), which is why every Spring project looks the same.
+
+Gradle is the popular alternative — same concerns, different DSL (Groovy or Kotlin). Boot supports both equally.
+
+For our project we'll use Maven because its XML pom.xml is more explicit and easier to reason about while learning.
+
+Interview-ready answer: "Maven is a build tool that manages dependencies and the build lifecycle. Dependencies are declared in pom.xml and resolved transitively from repositories like Maven Central. It also defines standard build phases like compile, test, and package. Gradle is the main alternative."
