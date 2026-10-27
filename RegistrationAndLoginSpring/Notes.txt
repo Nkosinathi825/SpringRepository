@@ -1120,452 +1120,1287 @@ The Process :
 
 		sessionId = "abc123"
 
-13.IoC, Beans, ApplicationContext & Dependency Injection
-	
-	1. What is IoC?
+Browser / Client
+       │
+       │ HTTP
+       ▼
+┌──────────────────────────────────────────────┐
+│  YOUR JVM PROCESS                            │
+│                                              │
+│  ┌────────────────────────────────────────┐  │
+│  │  Embedded Tomcat  (:8080)              │  │
+│  │  ├─ Acceptor threads                   │  │
+│  │  ├─ Worker thread pool                 │  │
+│  │  └─ ServletContext                     │  │
+│  │      └─ DispatcherServlet ("/")        │  │
+│  └───────────────┬────────────────────────┘  │
+│                  │ delegates                 │
+│                  ▼                           │
+│  ┌────────────────────────────────────────┐  │
+│  │  Spring MVC                            │  │
+│  │  ├─ HandlerMapping                     │  │
+│  │  ├─ HandlerAdapter                     │  │
+│  │  ├─ HttpMessageConverters              │  │
+│  │  └─ HandlerExceptionResolver           │  │
+│  └───────────────┬────────────────────────┘  │
+│                  │ invokes                   │
+│                  ▼                           │
+│  ┌────────────────────────────────────────┐  │
+│  │  @RestController HelloController       │  │
+│  │  (a bean in the ApplicationContext)    │  │
+│  └────────────────────────────────────────┘  │
+│                                              │
+│  ┌────────────────────────────────────────┐  │
+│  │  ApplicationContext                    │  │
+│  │  (holds all beans, wires dependencies) │  │
+│  └────────────────────────────────────────┘  │
+└──────────────────────────────────────────────┘
 
-		IoC = Inversion of Control
+=================================================================================================================
+Lesson 3
 
-		The basic idea is:
+	package com.example.auth.hello;
 
-		Instead of our code creating and managing the objects it needs, Spring does it for us.
+	import org.springframework.stereotype.Service;
 
-		Without Spring, we usually control things ourselves.
+	@Service
+	public class HelloService {
 
-		With Spring, Spring takes over that responsibility.
+	    public String greet(String name) {
+	        return "Hello, " + name + "!";
+	    }
+	}
 
-	2. Normal Java — we create the objects ourselves
+	@RestController
+	public class HelloController {
 
-		For example:
+	    private final HelloService helloService;
 
-		public class UserService {
+	    public HelloController(HelloService helloService) {
+	        this.helloService = helloService;
+	    }
 
-		    public void register() {
-		        System.out.println("Registering user");
-		    }
+	    @GetMapping("/hello/{name}")
+	    public String hello(@PathVariable String name) {
+	        return helloService.greet(name);
+	    }
+	}
+
+	No @Autowired on the constructor. Since Spring 4.3, if a class has exactly one constructor, Spring uses it for injection automatically. @Autowired on it is optional and idiomatically omitted.
+	private final HelloService helloService; — final is possible only because we're using constructor injection. This is one of the reasons it's preferred.
+
+	What Spring Actually Did
+	------------------------
+
+		1.  SpringApplication.run(Application.class)
+		        │
+		        ▼
+		2.  Create ApplicationContext (AnnotationConfigServletWebServerApplicationContext)
+		        │
+		        ▼
+		3.  Register the primary source (Application.class) as a bean definition
+		        │  Because @SpringBootApplication is a @Configuration, Application itself becomes a bean
+		        │
+		        ▼
+		4.  Invoke ConfigurationClassPostProcessor
+		        │  Processes @ComponentScan, @Import, @Bean methods on config classes
+		        │
+		        ▼
+		5.  Component scan runs
+		        │  Starts at package "com.example.auth" (Application's package)
+		        │  Walks class files recursively via ASM (bytecode inspection — no class loading yet)
+		        │  For each .class, checks: is it annotated with any of
+		        │      @Component, @Service, @Repository, @Controller, @RestController,
+		        │      @Configuration, or a custom stereotype?
+		        │
+		        │  Finds:  HelloController  (via @RestController → @Controller → @Component)
+		        │  Finds:  HelloService     (via @Service → @Component)
+		        │
+		        │  For each, creates a BeanDefinition:
+		        │      class name, scope=singleton, autowire mode, lazy=false, primary=false, ...
+		        │      registers it in the BeanDefinitionRegistry (a Map<String, BeanDefinition>)
+		        │
+		        │  Bean names default to camelCase class name:
+		        │      "helloController", "helloService"
+		        │
+		        ▼
+		6.  Auto-configuration classes register more bean definitions
+		        │  DispatcherServletAutoConfiguration → dispatcherServlet
+		        │  WebMvcAutoConfiguration → RequestMappingHandlerMapping, message converters, etc.
+		        │  ServletWebServerFactoryAutoConfiguration → tomcatServletWebServerFactory
+		        │  ...dozens more, each guarded by @Conditional*
+		        │
+		        ▼
+		7.  BeanFactoryPostProcessors run
+		        │  (opportunity to modify bean definitions before instantiation — mostly irrelevant here)
+		        │
+		        ▼
+		8.  preInstantiateSingletons()
+		        │  Iterates all non-lazy singleton bean definitions and calls getBean(name) on each
+		        │
+		        │  Say it gets to "helloController":
+		        │      → look up bean definition
+		        │      → find constructor: HelloController(HelloService)
+		        │      → for each constructor parameter, resolve a dependency
+		        │          parameter type: HelloService
+		        │          call resolveDependency(HelloService.class)
+		        │              → find candidate bean definitions matching HelloService
+		        │              → exactly one match: "helloService"
+		        │              → recursively getBean("helloService")
+		        │                  → HelloService not yet created; instantiate now
+		        │                      → find constructor: HelloService()   (default no-arg)
+		        │                      → invoke it: new HelloService()
+		        │                      → run BeanPostProcessors (proxies, @PostConstruct, etc.)
+		        │                      → register singleton "helloService" in the singleton cache
+		        │                      → return instance
+		        │              → return HelloService instance
+		        │      → invoke: new HelloController(theHelloServiceInstance)
+		        │      → run BeanPostProcessors
+		        │      → register singleton "helloController"
+		        │
+		        ▼
+		9.  Finish refresh: publish ContextRefreshedEvent
+		        │
+		        ▼
+		10. Web server starts (Tomcat) — DispatcherServlet mapped, requests can now flow
+
+
+	What a BeanDefinition Actually Is
+	---------------------------------
+
+		public interface BeanDefinition {
+		    String getBeanClassName();      // "com.example.auth.hello.HelloService"
+		    String getScope();              // "singleton"
+		    boolean isLazyInit();           // false
+		    boolean isPrimary();            // false
+		    ConstructorArgumentValues getConstructorArgumentValues();
+		    MutablePropertyValues getPropertyValues();
+		    String getFactoryMethodName();  // for @Bean methods, this points to the factory method
+		    String getInitMethodName();
+		    String getDestroyMethodName();
+		    // ...
 		}
 
-		And:
+		Component scan creates one of these per discovered @Component. @Bean methods create one per method. XML <bean> elements create one per element. All roads lead to BeanDefinition.
 
-		public class UserController {
+		This matters because it explains a lot of behavior:
+		---------------------------------------------------
 
-		    private UserService userService;
+			1.You can inspect and modify definitions before beans are instantiated (that's what BeanFactoryPostProcessor does).
 
-		    public UserController() {
-		        this.userService = new UserService();
-		    }
+			2.You can register a bean definition programmatically at any point during context configuration — no annotation required.
 
-		    public void register() {
-		        userService.register();
-		    }
+			3.Boot's auto-configuration works entirely at the BeanDefinition level; the "conditional" checks are checks against the current set of definitions.
+
+		"A BeanDefinition is metadata describing how Spring should create and configure a bean — class name, scope, constructor arguments, init/destroy methods, autowire mode. Component scan, @Bean methods, and XML are just different ways of producing BeanDefinitions. Instantiation happens later, driven by these definitions."
+
+
+	The Four Stereotypes: @Component, @Service, @Repository, @Controller
+	--------------------------------------------------------------------
+
+		@Target({ElementType.TYPE})
+		@Retention(RetentionPolicy.RUNTIME)
+		@Component        // ← literally
+		public @interface Service {
+		    @AliasFor(annotation = Component.class)
+		    String value() default "";
 		}
+		Note : All four register a bean the same way, via component scan, at the same time.
 
-		The important line is:
+		So why have four?
+		-----------------
 
-		this.userService = new UserService();
+			1.@Component : Generic bean stereotype
 
-		UserController is creating its own dependency.
+			2.@Service : Semantic: "this is a service-layer class" this annotation is not different from @Component
 
-		So the relationship is:
+			3.@Controller : recognized by RequestMappingHandlerMapping as a source of web handlers : in simple terms this one is also recognized by Spring MVC 
 
-		UserController
-		      │
-		      │ creates
-		      ↓
-		UserService
-
-		The controller is in control of creating UserService.
-
-	3. Now Spring takes over
-
-		With Spring, we can write:
-
-		@Service
-		public class UserService {
-
-		    public void register() {
-		        System.out.println("Registering user");
-		    }
-		}
-
-		And:
-
-		@RestController
-		public class UserController {
-
-		    private final UserService userService;
-
-		    public UserController(UserService userService) {
-		        this.userService = userService;
-		    }
-
-		    public void register() {
-		        userService.register();
-		    }
-		}
-
-		Notice there is no:
-
-		new UserService();
-
-		inside UserController.
-
-		So where does the UserService come from?
-
-		Spring creates it and gives it to UserController.
-
-		That's IoC.
-
-	4. What exactly has been "inverted"?
-
-		Before Spring:
-
-		Your code
-		   │
-		   ├── creates UserController
-		   ├── creates UserService
-		   └── connects them
-
-		With Spring:
-
-		Spring
-		   │
-		   ├── creates UserController
-		   ├── creates UserService
-		   └── connects them
-
-		So the control has moved from:
-
-		Your code
-		    ↓
-		Spring
-
-		That's the "inversion" in Inversion of Control.
-
-	5. What is a Bean?
-
-		A bean is basically an object that Spring creates and manages.
-
-		For example:
-
-		@Service
-		public class UserService {
-		}
-
-		Spring sees @Service and thinks roughly:
-
-		"I found this class.
-		I should create an object from it
-		and manage that object."
-
-		Conceptually:
-
-		UserService userService = new UserService();
-
-		Spring then manages that object.
-
-		That object is called a Spring bean.
+			4.@Repository : triggers exception translation (JPA/Hibernate exceptions → Spring's DataAccessException 				hierarchy)
 
 		So:
+		--
 
-		Class
-		 ↓
-		@Service
-		 ↓
-		Spring discovers it
-		 ↓
-		Spring creates an object
-		 ↓
-		That object becomes a Spring bean
-	6. @Controller, @Service, @Repository
+			@Service is purely documentation. Removing @Service and using @Component would work identically.
+			
+			@Controller adds a real behavior (handler mapping notices it). Remove it and the controller silently stops handling requests.
+			
+			@Repository adds exception translation (via a BeanPostProcessor called PersistenceExceptionTranslationPostProcessor). Remove it and JPA exceptions leak through untranslated. We'll come back to this at Stage 7.
 
-		These annotations tell Spring that a class should be discovered and managed as a bean.
+		"All four are stereotypes that register a bean via component scan; underneath, @Service, @Repository, and @Controller are all meta-annotated with @Component. @Service is purely semantic. @Controller is functionally different — it's what makes Spring MVC's handler mapping recognize the class. @Repository adds exception translation to Spring's DataAccessException hierarchy."
 
-		For example:
 
-		@Service
-		public class UserService {
+	Constructor vs Setter vs Field Injection
+	----------------------------------------
+
+
+		+-----------------------------------------------+-------------+--------+-------+
+		| Property                                      | Constructor | Setter | Field |
+		+-----------------------------------------------+-------------+--------+-------+
+		| Fields can be final (truly immutable)         |     YES     |   NO   |  NO   |
+		| Object cannot exist half-constructed          |     YES     |   NO   |  NO   |
+		| Trivially testable without Spring             |     YES     |   YES  |  NO   |
+		| Circular dependencies fail loudly at startup  |     YES     |   NO   |  NO   |
+		| Too many dependencies become obvious          |     YES     |   NO   |  NO   |
+		| Works without Spring at all                   |     YES     |   YES  |  NO   |
+		+-----------------------------------------------+-------------+--------+-------+
+
+		The circular-dependency point is the interview trap. With setter or field injection, Spring can create bean A partially, then bean B, then finish A. Circles are silently resolved. With constructor injection, Spring can't — A can't be constructed without B, and B can't be constructed without A. The startup fails with BeanCurrentlyInCreationException, forcing you to fix the design.
+
+		"Constructor injection is preferred because dependencies become immutable (final), the object is always fully initialized, circular dependencies fail loudly at startup instead of being silently patched, and the class is testable with plain new — no Spring or reflection required. Field injection breaks all four of those properties, which is why it's discouraged in production code."
+
+
+	What If There Are Multiple Candidates?
+	---------------------------------------
+
+		public interface Greeter {
+		    String greet(String name);
 		}
-		@Repository
-		public class UserRepository {
-		}
-		@Controller
-		public class UserController {
-		}
 
-		And:
+		@Service class FormalGreeter implements Greeter { ... }
+		@Service class CasualGreeter implements Greeter { ... }
 
 		@RestController
-		public class UserController {
+		class HelloController {
+		    HelloController(Greeter greeter) { ... }   // which one?!
 		}
 
-		@RestController is also a Spring-managed component.
+		Spring resolves ambiguity in this order:
+		----------------------------------------
 
-		So don't think:
+			1.@Primary on one of the beans — that one wins.
+			   @Service @Primary class FormalGreeter implements Greeter { ... }
 
-		"@Service magically creates an object."
+			2.@Qualifier at the injection point — explicit selection.
+			   HelloController(@Qualifier("casualGreeter") Greeter greeter) { ... }
 
-		A better way to think about it is:
+			3.Parameter name match — if the constructor parameter is named casualGreeter, Spring matches by bean name. (Requires debug info in the compiled bytecode; Boot's default compile settings include it.)
 
-		"@Service makes the class eligible for Spring's component scanning, and Spring can then create and manage an instance of that class as a bean."
+			If none of those disambiguate, Spring throws NoUniqueBeanDefinitionException at startup.
 
-	7. What is the ApplicationContext?
 
-		Now we have a problem.
+		You can also inject all implementations at once:
 
-		If Spring is responsible for creating and managing all these objects...
+			HelloController(List<Greeter> greeters) { ... }   // gets both
+			HelloController(Map<String, Greeter> greeters) { ... }  // beanName → instance
 
-		Where does Spring keep track of them?
+		This is the pattern for strategy/plugin architectures.
 
-		This is where the ApplicationContext comes in.
+		"Spring resolves multiple candidates in order: @Primary, then @Qualifier, then parameter name. If none disambiguate, startup fails with NoUniqueBeanDefinitionException. You can also inject all candidates as List<T> or Map<String, T>."
 
-		The ApplicationContext is basically Spring's container for the application.
 
-		A useful mental model is:
+	Bean Scopes
+	-----------
 
-		ApplicationContext
-		       │
-		       ├── UserController
-		       ├── UserService
-		       ├── UserRepository
-		       └── ...
+		By default, every bean is a singleton — one instance per ApplicationContext, shared across every injection point. Not "singleton" in the Gang-of-Four sense (that's per-JVM); this is per-container.
 
-		You can think of it like a big place where Spring keeps track of the beans it manages.
 
-	8. Very simplified ApplicationContext
+		The scopes:
+		-----------
 
-		Imagine we created our own tiny version of Spring:
+			+-----------------+----------------------------+------------------------------------------------+
+			| Scope           | Instances                  | When to use                                    |
+			+-----------------+----------------------------+------------------------------------------------+
+			| singleton       | One per container          | Almost everything — services, repositories,    |
+			| (default)       |                            | controllers, config                            |
+			| prototype       | New instance per injection | Stateful helpers you want fresh each time      |
+			|                 | / getBean call             |                                                |
+			| request         | One per HTTP request       | Request-scoped state (rare; prefer method      |
+			| (web only)      |                            | parameters)                                    |
+			| session         | One per HTTP session       | Session-scoped state (rare in stateless APIs)  |
+			| (web only)      |                            |                                                |
+			| application     | One per ServletContext     | Basically singleton for web apps               |
+			| websocket       | One per WebSocket session  | Niche                                          |
+			+-----------------+----------------------------+------------------------------------------------+
 
-		public class MyApplicationContext {
 
-		    private Map<String, Object> beans = new HashMap<>();
+			The gotcha: if a singleton depends on a prototype, the prototype is created once and then reused — because the singleton is created once. To get fresh prototypes on every use, you need @Lookup, ObjectProvider<T>, or a scoped proxy. Same problem applies for injecting a request-scoped bean into a singleton. This trips people up in interviews.
 
-		    public void register(String name, Object object) {
-		        beans.put(name, object);
+			Interview answer: "Beans default to singleton scope — one instance per ApplicationContext, shared across injection points. Other scopes are prototype (new instance per lookup) and web scopes: request, session, application, websocket. Injecting a shorter-scoped bean into a longer-scoped one requires a scoped proxy or ObjectProvider, otherwise the shorter-scoped instance is captured once and reused."
+
+
+	INTERVIEW QUICK-REFERENCE
+	-------------------------
+
+	Question                                      1-sentence answer
+	--------------------------------------------  ---------------------------------------------------------------------------
+	What's a bean?                               Any object whose lifecycle is managed by the Spring container,
+	                                             registered via a BeanDefinition.
+
+	What's a BeanDefinition?                     Metadata describing how Spring should create a bean — class, scope,
+	                                             constructor args, init/destroy methods; produced by component scan,
+	                                             @Bean, or XML.
+
+	How does component scan work?                Starting from @ComponentScan's base package, Spring walks class files
+	                                             (via ASM bytecode reading, no class loading), and registers a
+	                                             BeanDefinition for any class annotated with @Component or a
+	                                             meta-annotated stereotype.
+
+	Do @Component, @Service,                     All register as beans identically. @Controller is recognized by
+	@Repository, @Controller behave differently? RequestMappingHandlerMapping, @Repository triggers exception
+	                                             translation, @Service is purely semantic.
+
+	Why is constructor injection preferred?      Immutability via final, no half-constructed objects, testable without
+	                                             Spring, circular dependencies fail loudly.
+
+	How does Spring resolve multiple candidates? @Primary → @Qualifier → parameter name; failing all,
+	                                             NoUniqueBeanDefinitionException.
+
+	What's the default scope?                    Singleton — one instance per ApplicationContext.
+
+	What's the singleton-with-prototype-         Prototypes injected into singletons are captured once at singleton
+	dependency problem?                          construction; need ObjectProvider, @Lookup, or a scoped proxy for
+	                                             fresh instances per use.
+
+	What runs @PostConstruct?                    CommonAnnotationBeanPostProcessor during bean initialization,
+	                                             after DI is complete.
+
+	Why does calling a @Transactional method     The transaction behavior lives on the proxy wrapped around the bean;
+	on this not work?                            this is the raw instance and bypasses the proxy. (More at Stage 8.)
+    ---------------------------------------------------------------------------------------------------------------------------
+
+	Extra Notes(Not Formal) 
+	-----------------------
+
+	13.IoC, Beans, ApplicationContext & Dependency Injection
+		
+		1. What is IoC?
+
+			IoC = Inversion of Control
+
+			The basic idea is:
+
+			Instead of our code creating and managing the objects it needs, Spring does it for us.
+
+			Without Spring, we usually control things ourselves.
+
+			With Spring, Spring takes over that responsibility.
+
+		2. Normal Java — we create the objects ourselves
+
+			For example:
+
+			public class UserService {
+
+			    public void register() {
+			        System.out.println("Registering user");
+			    }
+			}
+
+			And:
+
+			public class UserController {
+
+			    private UserService userService;
+
+			    public UserController() {
+			        this.userService = new UserService();
+			    }
+
+			    public void register() {
+			        userService.register();
+			    }
+			}
+
+			The important line is:
+
+			this.userService = new UserService();
+
+			UserController is creating its own dependency.
+
+			So the relationship is:
+
+			UserController
+			      │
+			      │ creates
+			      ↓
+			UserService
+
+			The controller is in control of creating UserService.
+
+		3. Now Spring takes over
+
+			With Spring, we can write:
+
+			@Service
+			public class UserService {
+
+			    public void register() {
+			        System.out.println("Registering user");
+			    }
+			}
+
+			And:
+
+			@RestController
+			public class UserController {
+
+			    private final UserService userService;
+
+			    public UserController(UserService userService) {
+			        this.userService = userService;
+			    }
+
+			    public void register() {
+			        userService.register();
+			    }
+			}
+
+			Notice there is no:
+
+			new UserService();
+
+			inside UserController.
+
+			So where does the UserService come from?
+
+			Spring creates it and gives it to UserController.
+
+			That's IoC.
+
+		4. What exactly has been "inverted"?
+
+			Before Spring:
+
+			Your code
+			   │
+			   ├── creates UserController
+			   ├── creates UserService
+			   └── connects them
+
+			With Spring:
+
+			Spring
+			   │
+			   ├── creates UserController
+			   ├── creates UserService
+			   └── connects them
+
+			So the control has moved from:
+
+			Your code
+			    ↓
+			Spring
+
+			That's the "inversion" in Inversion of Control.
+
+		5. What is a Bean?
+
+			A bean is basically an object that Spring creates and manages.
+
+			For example:
+
+			@Service
+			public class UserService {
+			}
+
+			Spring sees @Service and thinks roughly:
+
+			"I found this class.
+			I should create an object from it
+			and manage that object."
+
+			Conceptually:
+
+			UserService userService = new UserService();
+
+			Spring then manages that object.
+
+			That object is called a Spring bean.
+
+			So:
+
+			Class
+			 ↓
+			@Service
+			 ↓
+			Spring discovers it
+			 ↓
+			Spring creates an object
+			 ↓
+			That object becomes a Spring bean
+
+
+		6. @Controller, @Service, @Repository
+
+			These annotations tell Spring that a class should be discovered and managed as a bean.
+
+			For example:
+
+			@Service
+			public class UserService {
+			}
+			@Repository
+			public class UserRepository {
+			}
+			@Controller
+			public class UserController {
+			}
+
+			And:
+
+			@RestController
+			public class UserController {
+			}
+
+			@RestController is also a Spring-managed component.
+
+			So don't think:
+
+			"@Service magically creates an object."
+
+			A better way to think about it is:
+
+			"@Service makes the class eligible for Spring's component scanning, and Spring can then create and manage an instance of that class as a bean."
+
+		7. What is the ApplicationContext?
+
+			Now we have a problem.
+
+			If Spring is responsible for creating and managing all these objects...
+
+			Where does Spring keep track of them?
+
+			This is where the ApplicationContext comes in.
+
+			The ApplicationContext is basically Spring's container for the application.
+
+			A useful mental model is:
+
+			ApplicationContext
+			       │
+			       ├── UserController
+			       ├── UserService
+			       ├── UserRepository
+			       └── ...
+
+			You can think of it like a big place where Spring keeps track of the beans it manages.
+
+		8. Very simplified ApplicationContext
+
+			Imagine we created our own tiny version of Spring:
+
+			public class MyApplicationContext {
+
+			    private Map<String, Object> beans = new HashMap<>();
+
+			    public void register(String name, Object object) {
+			        beans.put(name, object);
+			    }
+
+			    public Object getBean(String name) {
+			        return beans.get(name);
+			    }
+			}
+
+			Then:
+
+			MyApplicationContext context =
+			        new MyApplicationContext();
+
+			UserService userService =
+			        new UserService();
+
+			context.register("userService", userService);
+
+			Now conceptually:
+
+			ApplicationContext
+			       │
+			       └── "userService"
+			                ↓
+			          UserService object
+
+			Later, you could ask:
+
+			UserService service =
+			    (UserService) context.getBean("userService");
+
+			Basically:
+
+			"Give me the UserService object that you're managing."
+
+			And the context gives it to you.
+
+		9. The real ApplicationContext does much more
+
+			The real ApplicationContext isn't just a simple Map.
+
+			It is responsible for a lot of Spring's infrastructure.
+
+			Some of the important things include:
+
+			ApplicationContext
+			       │
+			       ├── Bean creation
+			       ├── Dependency Injection
+			       ├── Bean lifecycle
+			       ├── Configuration
+			       ├── Component scanning
+			       ├── Events
+			       ├── Application properties
+			       └── other Spring infrastructure
+
+			So a good mental model is:
+
+			                 ApplicationContext
+			                        │
+			          ┌─────────────┼─────────────┐
+			          ↓             ↓             ↓
+			        Beans      Configuration   Infrastructure
+			          │
+			          ├── UserController
+			          ├── UserService
+			          ├── UserRepository
+			          └── ...
+		10. How does Spring find these classes?
+
+			This is where things like:
+
+			@Component
+			@Service
+			@Repository
+			@Controller
+			@RestController
+
+			come into play.
+
+			Suppose we have:
+
+			@Service
+			public class UserService {
+			}
+			@Repository
+			public class UserRepository {
+			}
+			@RestController
+			public class UserController {
+
+			    private final UserService userService;
+
+			    public UserController(UserService userService) {
+			        this.userService = userService;
+			    }
+			}
+
+			When the application starts, roughly speaking:
+
+			Spring Boot starts
+			       ↓
+			ApplicationContext created
+			       ↓
+			Component scanning
+			       ↓
+			Find @Service
+			       ↓
+			Create UserService
+			       ↓
+			Find @Repository
+			       ↓
+			Create UserRepository
+			       ↓
+			Find @RestController
+			       ↓
+			Create UserController
+			       ↓
+			Inject UserService into UserController
+
+			Eventually the context has something like:
+
+			ApplicationContext
+			│
+			├── UserService
+			│
+			├── UserRepository
+			│
+			└── UserController
+			       │
+			       └── UserService
+		11. This is where Dependency Injection comes in
+
+			IoC and DI are closely related.
+
+			Look at:
+
+			public class UserController {
+
+			    private final UserService userService;
+
+			    public UserController(UserService userService) {
+			        this.userService = userService;
+			    }
+			}
+
+			UserController depends on UserService.
+
+			That's why we call UserService a dependency.
+
+			Without Spring, you might do:
+
+			public UserController() {
+			    this.userService = new UserService();
+			}
+
+			The controller creates its own dependency.
+
+			With Spring:
+
+			public UserController(UserService userService) {
+			    this.userService = userService;
+			}
+
+			The controller basically says:
+
+			"I need a UserService."
+
+			Spring says:
+
+			"Okay, here you go."
+
+		12. The Dependency Injection process
+
+			Conceptually:
+
+			Spring creates UserService
+			        ↓
+			Spring creates UserController
+			        ↓
+			Spring sees UserController needs UserService
+			        ↓
+			Spring passes UserService into constructor
+
+			So:
+
+			UserController
+			      │
+			      │ needs
+			      ↓
+			UserService
+
+			And Spring connects them.
+
+			That's Dependency Injection.
+
+		13. IoC vs Dependency Injection
+
+			These are related, but they aren't exactly the same thing.
+
+			IoC
+
+			IoC is the big/general idea:
+
+			The framework takes control of creating and managing objects instead of your application code doing it.
+
+			Dependency Injection
+
+			DI is one way of achieving IoC.
+
+			It means:
+
+			Instead of an object creating its own dependencies, the dependencies are provided to it.
+
+			So you can think of it like:
+
+			IoC
+			 │
+			 └── Dependency Injection
+
+			Or:
+
+			IoC = the overall principle
+
+			DI = one technique Spring uses to implement that principle
+
+=================================================================================================================
+
+Lesson 5 (Databases, JDBC, and Connection Pools)
+------------------------------------------------
+
+
+	Every single row of data your app ever reads flows through this stack. JPA/Hibernate don't bypass JDBC — they generate JDBC calls under the hood. Spring Data JPA doesn't bypass Hibernate — it generates method implementations that call into it. The abstractions stack; they don't replace.
+
+	"JPA is a specification; Hibernate is an implementation of that specification; Spring Data JPA is a layer on top of JPA that generates repository implementations from interfaces. All three ultimately produce JDBC calls, which the vendor-specific JDBC driver turns into the database's wire protocol."
+
+
+	Relational Database Primer
+	--------------------------
+
+		A relational database stores data in tables — a table is a set of rows, each row having the same columns. Each column has a type (text, integer, timestamp, boolean, etc.).
+
+		The things that matter for our app:
+		-----------------------------------
+
+			1.Primary key — one or more columns that uniquely identify a row. For users, that's typically an id column. The DB enforces uniqueness.
+			
+			2.Foreign key — a column that refers to a primary key in another table. If orders has a user_id, that's a foreign key referencing users(id). The DB enforces that the referenced row exists.
+			
+			3.Index — a secondary data structure the DB maintains to speed up lookups on specific columns. Without an index on users.email, "find user by email" scans every row. With one, it's roughly O(log n). Primary keys are indexed automatically.
+			
+			4.Constraints — rules the DB enforces: NOT NULL, UNIQUE, CHECK (age >= 0), foreign keys. The database rejects writes that violate them.
+			
+			5.Transactions — a group of statements treated as one atomic unit. Either all succeed or none do. (We'll do transactions properly at Stage 8.)
+			
+			6.ACID — Atomicity (all-or-nothing), Consistency (constraints hold), Isolation (concurrent transactions don't see each other's partial work), Durability (committed data survives crashes).
+
+	JDBC(Java Database Connectivity)
+    --------------------------------
+
+    	It's a Java API in the java.sql package, standardized as part of Java SE. It is not Spring, and it is not vendor-specific.
+
+
+    	The core interfaces:
+
+			1.java.sql.DataSource     // factory for Connections
+			
+			2.java.sql.Connection     // an open connection to the database
+			
+			3.java.sql.Statement      // a SQL statement (prefer PreparedStatement)
+			
+			4.java.sql.PreparedStatement  // a parameterized SQL statement
+			
+			5.java.sql.ResultSet      // the rows returned by a query
+
+
+
+
+
+	Here is a complete JDBC query, written by hand with no Spring:
+	--------------------------------------------------------------
+
+		import java.sql.*;
+		import javax.sql.DataSource;
+
+		public class RawJdbcExample {
+
+		    private final DataSource dataSource;
+
+		    public RawJdbcExample(DataSource dataSource) {
+		        this.dataSource = dataSource;
 		    }
 
-		    public Object getBean(String name) {
-		        return beans.get(name);
+		    public String findEmailById(long id) throws SQLException {
+		        String sql = "SELECT email FROM users WHERE id = ?";
+
+		        try (Connection conn = dataSource.getConnection();
+		             PreparedStatement stmt = conn.prepareStatement(sql)) {
+
+		            stmt.setLong(1, id);
+
+		            try (ResultSet rs = stmt.executeQuery()) {
+		                if (rs.next()) {
+		                    return rs.getString("email");
+		                }
+		                return null;
+		            }
+		        }
 		    }
 		}
 
-		Then:
+	The dance:
+		
+		1.dataSource.getConnection() — borrow a connection (from a pool, in practice).
+		
+		2.conn.prepareStatement(sql) — ask the driver to prepare the SQL. The ? placeholders are bind parameters — this is how we avoid SQL injection.
+		
+		3.stmt.setLong(1, id) — bind the parameter. Note indices are 1-based, not 0-based. JDBC was written in 1997, back when some SQL dialects were 1-indexed.
+		
+		4.stmt.executeQuery() — the driver sends the SQL + parameters to the database.
+		
+		5.rs.next() — advance the cursor to the next row; returns false if there are no more.
+		
+		6.rs.getString("email") — pull a column by name (or by index — rs.getString(1)).
+		
+		7.All the try-with-resources blocks — JDBC resources must be closed. A missed close is a connection leak that will eventually exhaust the pool and freeze your app.
 
-		MyApplicationContext context =
-		        new MyApplicationContext();
 
-		UserService userService =
-		        new UserService();
-
-		context.register("userService", userService);
-
-		Now conceptually:
-
-		ApplicationContext
-		       │
-		       └── "userService"
-		                ↓
-		          UserService object
-
-		Later, you could ask:
-
-		UserService service =
-		    (UserService) context.getBean("userService");
-
-		Basically:
-
-		"Give me the UserService object that you're managing."
-
-		And the context gives it to you.
-
-	9. The real ApplicationContext does much more
-
-		The real ApplicationContext isn't just a simple Map.
-
-		It is responsible for a lot of Spring's infrastructure.
-
-		Some of the important things include:
-
-		ApplicationContext
-		       │
-		       ├── Bean creation
-		       ├── Dependency Injection
-		       ├── Bean lifecycle
-		       ├── Configuration
-		       ├── Component scanning
-		       ├── Events
-		       ├── Application properties
-		       └── other Spring infrastructure
+	Why PreparedStatement and not Statement
+	---------------------------------------
+
+		Don't do this:
+
+			java
+			String sql = "SELECT email FROM users WHERE id = " + id;  // DANGER
 
-		So a good mental model is:
+			Even for integer parameters this is a reflex you want to kill now. With user-controlled input it becomes catastrophic:
 
-		                 ApplicationContext
-		                        │
-		          ┌─────────────┼─────────────┐
-		          ↓             ↓             ↓
-		        Beans      Configuration   Infrastructure
-		          │
-		          ├── UserController
-		          ├── UserService
-		          ├── UserRepository
-		          └── ...
-	10. How does Spring find these classes?
+			java
+			String sql = "SELECT * FROM users WHERE email = '" + userInput + "'";
+			// userInput = "' OR '1'='1"  →  returns every user
+			// userInput = "'; DROP TABLE users; --"  →  table gone
 
-		This is where things like:
+		PreparedStatement binds parameters outside the SQL string. The driver sends the SQL template and the parameters as separate things over the wire. The database parses the SQL once and treats the parameters as opaque values — they can never be interpreted as SQL. SQL injection becomes architecturally impossible.
 
-		@Component
-		@Service
-		@Repository
-		@Controller
-		@RestController
+		Second benefit: the database caches the parsed query plan for the SQL template, so repeated calls with different parameter values skip the parse step.
 
-		come into play.
+		JDBC is Java's standard database API in java.sql. The core types are DataSource (connection factory), Connection, PreparedStatement (parameterized SQL), and ResultSet (query results). Always use PreparedStatement with bind parameters, not string concatenation — it's immune to SQL injection and benefits from query plan caching.
 
-		Suppose we have:
+	JDBC Drivers
+	------------
 
-		@Service
-		public class UserService {
-		}
-		@Repository
-		public class UserRepository {
-		}
-		@RestController
-		public class UserController {
+		JDBC itself is just interfaces. Doing something useful requires an implementation — a driver — that knows how to talk to a specific database.
 
-		    private final UserService userService;
+		For PostgreSQL: the org.postgresql:postgresql jar on Maven Central. It contains classes like org.postgresql.Driver and org.postgresql.jdbc.PgConnection that implement java.sql.Driver and java.sql.Connection respectively.
 
-		    public UserController(UserService userService) {
-		        this.userService = userService;
-		    }
-		}
+		How the driver gets wired in:
+		-----------------------------
 
-		When the application starts, roughly speaking:
+			1.Historically, you called Class.forName("org.postgresql.Driver") to force-load the driver class, which registered itself via a static initializer with java.sql.DriverManager.
+			
+			2.Since JDBC 4.0 (Java 6+), drivers register themselves automatically via the Service Provider Interface — they ship a file at META-INF/services/java.sql.Driver that names the driver class. Just having the jar on the classpath is enough.
 
-		Spring Boot starts
-		       ↓
-		ApplicationContext created
-		       ↓
-		Component scanning
-		       ↓
-		Find @Service
-		       ↓
-		Create UserService
-		       ↓
-		Find @Repository
-		       ↓
-		Create UserRepository
-		       ↓
-		Find @RestController
-		       ↓
-		Create UserController
-		       ↓
-		Inject UserService into UserController
+		When you call dataSource.getConnection() on a vendor-neutral DataSource, it uses a URL like:
 
-		Eventually the context has something like:
+		jdbc:postgresql://localhost:5432/auth
 
-		ApplicationContext
-		│
-		├── UserService
-		│
-		├── UserRepository
-		│
-		└── UserController
-		       │
-		       └── UserService
-	11. This is where Dependency Injection comes in
+		The URL's second segment (postgresql) is matched against registered drivers. The matching driver opens a TCP socket to localhost:5432, performs PostgreSQL's startup handshake, authenticates, and hands back a PgConnection that satisfies the java.sql.Connection interface.
 
-		IoC and DI are closely related.
+		This is why you can swap databases. Change the driver jar, change the URL, and most of your JDBC code keeps working — because it was written against java.sql.Connection, not PgConnection. Vendor-specific features (PostgreSQL JSONB, ARRAY types, COPY) break this portability, but basic CRUD is portable.
 
-		Look at:
 
-		public class UserController {
+	Connections and Why They Need a Pool
+	------------------------------------
 
-		    private final UserService userService;
+		Opening a database connection is expensive. For PostgreSQL, each connection costs roughly:
 
-		    public UserController(UserService userService) {
-		        this.userService = userService;
-		    }
-		}
+			A TCP handshake (3 round trips)
+			
+			A TLS handshake if encrypted (another 2 round trips)
+			
+			Authentication (1–3 round trips depending on method)
+			
+			PostgreSQL spawns a new OS process per connection (not a thread — a process)
+			
+			Per-connection memory on the server, typically multiple MB
 
-		UserController depends on UserService.
+		Opening a connection takes tens to hundreds of milliseconds. If every HTTP request opened a new connection, your app would be unusable at any real load.
 
-		That's why we call UserService a dependency.
+		The solution is a connection pool: a long-lived set of connections created at startup, lent out to code that needs one, and returned to the pool when done.
 
-		Without Spring, you might do:
+		┌─────────────────────────────────────────┐
+		│  HikariPool                             │
+		│  ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐        │
+		│  │Conn1│ │Conn2│ │Conn3│ │Conn4│  ...   │
+		│  └─────┘ └─────┘ └─────┘ └─────┘        │
+		│  idle    in-use  idle    in-use         │
+		└─────────────────────────────────────────┘
+		         ▲             │
+		         │             │
+		    returned          borrowed
+		         │             │
+		         │             ▼
+		    ┌──────────────────────────┐
+		    │  Application thread      │
+		    │  dataSource.getConnection│
+		    │  → use → close           │
+		    └──────────────────────────┘
 
-		public UserController() {
-		    this.userService = new UserService();
-		}
+		Note conn.close() does not close the physical connection — the pool intercepts it and returns the connection to the idle set. This is why try-with-resources is still correct even with a pool.
 
-		The controller creates its own dependency.
+		Spring Boot's default pool is HikariCP — a very fast, battle-hardened implementation. Added automatically when you include any JDBC/JPA starter. Configuration lives under spring.datasource.hikari.* properties.
 
-		With Spring:
+		Key parameters you'll touch in production:
+		------------------------------------------
 
-		public UserController(UserService userService) {
-		    this.userService = userService;
-		}
+			properties
+			spring.datasource.hikari.maximum-pool-size=10
+			
+			spring.datasource.hikari.minimum-idle=10
+			
+			spring.datasource.hikari.connection-timeout=30000
+			
+			spring.datasource.hikari.idle-timeout=600000
+			
+			spring.datasource.hikari.max-lifetime=1800000
+		
+		maximum-pool-size — hard ceiling on concurrent connections. Default is 10, which is often correct. More is not better; most apps are DB-bound long before thread-count-bound. HikariCP's own docs make this point explicitly.
+		connection-timeout — how long a thread waits for a connection before failing. If all connections are in use and the pool is at max, requests queue; after this timeout, SQLTransientConnectionException.
+		max-lifetime — connections are retired after this age even if healthy, defending against DB-side resource leaks and firewall idle kills.
 
-		The controller basically says:
+		The "max connections = CPU count" instinct is wrong for DBs. Connections map to DB-side work (processes in PG, threads in MySQL), and the DB has its own concurrency limits. Over-sizing the pool makes things worse by stacking contention inside the database.
 
-		"I need a UserService."
+		Interview-ready: "A JDBC connection is expensive to open — TCP, TLS, auth, and a server-side process in PostgreSQL. A connection pool keeps a warm set of connections and lends them out. conn.close() returns to the pool; it doesn't disconnect physically. Spring Boot uses HikariCP by default. Pool sizing is about matching DB-side capacity, not application concurrency; 10 is often correct."
 
-		Spring says:
 
-		"Okay, here you go."
 
-	12. The Dependency Injection process
+	DataSource
+	----------
 
-		Conceptually:
+		javax.sql.DataSource is JDBC's abstraction for "something that produces connections." A connection pool implements it. A raw JDBC driver also provides a basic implementation. Your application code depends on DataSource and does not know (and should not care) whether a pool sits behind it.
 
-		Spring creates UserService
-		        ↓
-		Spring creates UserController
-		        ↓
-		Spring sees UserController needs UserService
-		        ↓
-		Spring passes UserService into constructor
+		In a Spring Boot app you never construct a DataSource by hand. When you add spring-boot-starter-jdbc (or JPA, which brings JDBC along), DataSourceAutoConfiguration fires:
 
-		So:
+		Reads spring.datasource.* properties.
+		Looks at the classpath — HikariCP is present via spring-boot-starter-jdbc.
+		Builds and configures a HikariDataSource bean.
+		Registers it as the DataSource bean in the context.
 
-		UserController
-		      │
-		      │ needs
-		      ↓
-		UserService
+		Any component that injects DataSource gets Hikari. You could override by defining your own @Bean DataSource — @ConditionalOnMissingBean would skip the auto-config. The pattern you've seen before.
 
-		And Spring connects them.
 
-		That's Dependency Injection.
+	Add Dependencies
+	----------------
 
-	13. IoC vs Dependency Injection
+		<dependencies>
+		    <dependency>
+		        <groupId>org.springframework.boot</groupId>
+		        <artifactId>spring-boot-starter-web</artifactId>
+		    </dependency>
 
-		These are related, but they aren't exactly the same thing.
+		    <!-- NEW: Spring JDBC + HikariCP via Boot -->
+		    <dependency>
+		        <groupId>org.springframework.boot</groupId>
+		        <artifactId>spring-boot-starter-jdbc</artifactId>
+		    </dependency>
 
-		IoC
+		    <!-- NEW: PostgreSQL driver (runtime scope — not needed at compile time) -->
+		    <dependency>
+		        <groupId>org.postgresql</groupId>
+		        <artifactId>postgresql</artifactId>
+		        <scope>runtime</scope>
+		    </dependency>
+		</dependencies>
 
-		IoC is the big/general idea:
+		Note <scope>runtime</scope> on the PostgreSQL driver. We don’t compile against driver-specific types — only java.sql.* and javax.sql.*. The driver only needs to be on the classpath at runtime so JDBC can find it. This is good discipline that keeps your code portable.
 
-		The framework takes control of creating and managing objects instead of your application code doing it.
+		Maven’s runtime scope means a dependency isn’t visible during compilation but is included in runtime and test classpaths. It’s correct for JDBC drivers because application code depends on java.sql.* interfaces, not vendor-specific classes — the driver is only discovered via SPI at runtime.
 
-		Dependency Injection
 
-		DI is one way of achieving IoC.
+	Configure the DataSource
+	------------------------
 
-		It means:
+		# Database connection
+		spring.datasource.url=jdbc:postgresql://localhost:5432/auth
+		spring.datasource.username=authapp
+		spring.datasource.password=devpass
+		spring.datasource.driver-class-name=org.postgresql.Driver
 
-		Instead of an object creating its own dependencies, the dependencies are provided to it.
+		# Hikari pool
+		spring.datasource.hikari.maximum-pool-size=10
+		spring.datasource.hikari.minimum-idle=2
+		spring.datasource.hikari.connection-timeout=30000
+		spring.datasource.hikari.pool-name=AuthHikariPool
 
-		So you can think of it like:
+		# SQL logging — useful while learning, remove in production
+		logging.level.org.springframework.jdbc.core.JdbcTemplate=DEBUG
 
-		IoC
-		 │
-		 └── Dependency Injection
 
-		Or:
+		A few points worth understanding:
+		---------------------------------
 
-		IoC = the overall principle
+			spring.datasource.driver-class-name is optional. Boot can usually infer the driver from the URL (jdbc:postgresql:// → org.postgresql.Driver). I’ve included it so you see it exists.
 
-		DI = one technique Spring uses to implement that principle
+			The URL format jdbc:postgresql://host:port/database is a JDBC convention — every driver has its own URL dialect. MySQL: jdbc:mysql://.... Oracle: jdbc:oracle:thin:@.... Learn to read these.
+
+			pool-name only matters for debugging — appears in logs and JMX. Setting it saves confusion later.
+
+			Credentials in application.properties are not production practice. We’ll cover externalization at Stage 17. For now, local dev credentials in a git-ignored file is fine.
+
+		YAML alternative
+		----------------
+
+			spring:
+			  datasource:
+			    url: jdbc:postgresql://localhost:5432/auth
+			    username: authapp
+			    password: devpass
+			    hikari:
+			      maximum-pool-size: 10
+			      pool-name: AuthHikariPool
+
+		Properties and YAML are interchangeable; Spring Boot reads both. YAML is denser for deep nesting; properties are simpler for flat config. Pick one and stick to it per project.
+
+	Externalized Configuration, Briefly
+	-----------------------------------
+
+		Everything in application.properties is externalized configuration. Spring Boot reads it from, in increasing priority order:
+
+			1.application.properties / application.yml baked into the jar
+			
+			2.application-{profile}.properties for an active profile
+			
+			3.External application.properties next to the jar
+			
+			4.OS environment variables (SPRING_DATASOURCE_URL)
+			
+			5.JVM system properties (-Dspring.datasource.url=...)
+			
+			6.Command-line arguments (--spring.datasource.url=...)
+
+		The property-key-to-environment-variable mapping is:
+		spring.datasource.url → SPRING_DATASOURCE_URL (dots → underscores, uppercase).
+
+		This is why containerized apps work. The same jar runs in dev, staging, and prod — only the env vars differ. Credentials never ship in the jar. You get this for free from Boot; you just need to use it.
+
+		Spring Boot reads configuration from application.properties/.yml, profile-specific files, external files, environment variables, system properties, and command-line arguments, in that priority order. Env vars map by uppercasing and replacing dots with underscores. This is what makes a Boot jar portable across environments.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 14.Validation in Spring MVC
 
